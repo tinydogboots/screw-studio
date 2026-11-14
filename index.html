@@ -512,22 +512,52 @@ function edgesOf(geo, angle = 25) {          // crisp edges of a flat-faceted pa
   for (let i = 0; i < a.count; i += 2) LINES.push([V3(a.getX(i), a.getY(i), a.getZ(i)), V3(a.getX(i + 1), a.getY(i + 1), a.getZ(i + 1))]);
   e.dispose();
 }
-// outline of a recess (or engraving) on a head top: marching squares at the rim of the cut
-function recessOutline(recess, top, R, yOff, thr = R * 0.01) {
-  const N = 220, h = 2 * R / N;
-  const f = (x, z) => (Math.hypot(x, z) < R * 0.995 ? recess(x, z) : 0) - thr;
-  const val = []; for (let j = 0; j <= N; j++) { const row = []; for (let i = 0; i <= N; i++) row.push(f(-R + i * h, -R + j * h)); val.push(row); }
-  const lift = (x, z) => V3(x, top(Math.hypot(x, z)) + yOff + R * 0.003, z);
-  const cross = (x0, z0, v0, x1, z1, v1) => { const t = v0 / (v0 - v1); return [x0 + (x1 - x0) * t, z0 + (z1 - z0) * t]; };
+/* Contour of a recess at one cut depth (marching squares), chained into long polylines and
+   lightly smoothed, then laid on the cut surface. Used twice for an engraving:
+   at the top edge of the cut and at its floor, which together show the depth. */
+function recessContour(recess, surfY, R, level, lift) {
+  const N = 360, h = 2 * R / N;
+  const f = (x, z) => (Math.hypot(x, z) < R * 0.995 ? recess(x, z) : 0) - level;
+  const val = []; for (let j = 0; j <= N; j++) { const row = new Float64Array(N + 1); for (let i = 0; i <= N; i++) row[i] = f(-R + i * h, -R + j * h); val.push(row); }
+  // edge crossings are computed once per grid edge, so neighbouring cells share exact endpoints
+  const hx = new Map(), vx = new Map();
+  const onH = (i, j) => { const k = j * (N + 1) + i; if (!hx.has(k)) { const a = val[j][i], b = val[j][i + 1], t = a / (a - b); hx.set(k, [-R + (i + t) * h, -R + j * h, 'h' + k]); } return hx.get(k); };
+  const onV = (i, j) => { const k = j * (N + 1) + i; if (!vx.has(k)) { const a = val[j][i], b = val[j + 1][i], t = a / (a - b); vx.set(k, [-R + i * h, -R + (j + t) * h, 'v' + k]); } return vx.get(k); };
+  const segs = [];
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const x0 = -R + i * h, z0 = -R + j * h, x1 = x0 + h, z1 = z0 + h;
-    const a = val[j][i], b = val[j][i + 1], c = val[j + 1][i + 1], d = val[j + 1][i];
+    const a = val[j][i] > 0, b = val[j][i + 1] > 0, c = val[j + 1][i + 1] > 0, d = val[j + 1][i] > 0;
     const pts = [];
-    if ((a > 0) !== (b > 0)) pts.push(cross(x0, z0, a, x1, z0, b));
-    if ((b > 0) !== (c > 0)) pts.push(cross(x1, z0, b, x1, z1, c));
-    if ((c > 0) !== (d > 0)) pts.push(cross(x1, z1, c, x0, z1, d));
-    if ((d > 0) !== (a > 0)) pts.push(cross(x0, z1, d, x0, z0, a));
-    for (let k = 0; k + 1 < pts.length; k += 2) LINES.push([lift(...pts[k]), lift(...pts[k + 1])]);
+    if (a !== b) pts.push(onH(i, j));
+    if (b !== c) pts.push(onV(i + 1, j));
+    if (c !== d) pts.push(onH(i, j + 1));
+    if (d !== a) pts.push(onV(i, j));
+    if (pts.length === 2) segs.push([pts[0], pts[1]]);
+    else if (pts.length === 4) { segs.push([pts[0], pts[3]]); segs.push([pts[1], pts[2]]); }   // saddle
+  }
+  // chain
+  const adj = new Map(); segs.forEach((s, n) => { for (const p of s) (adj.get(p[2]) || adj.set(p[2], []).get(p[2])).push(n); });
+  const used = new Uint8Array(segs.length);
+  for (let s0 = 0; s0 < segs.length; s0++) {
+    if (used[s0]) continue; used[s0] = 1;
+    const line = [segs[s0][0], segs[s0][1]];
+    for (let dir = 0; dir < 2; dir++) for (;;) {
+      const tip = dir ? line[0] : line[line.length - 1];
+      const n = (adj.get(tip[2]) || []).find(k => !used[k]); if (n === undefined) break;
+      used[n] = 1; const nxt = segs[n][0][2] === tip[2] ? segs[n][1] : segs[n][0];
+      dir ? line.unshift(nxt) : line.push(nxt);
+    }
+    if (line.length < 4) continue;                          // drop specks
+    const closed = line[0][2] === line[line.length - 1][2];
+    let pts = line.map(p => [p[0], p[1]]);
+    for (let pass = 0; pass < 2; pass++) {                    // soften the grid stair-steps
+      const n = pts.length;
+      pts = pts.map((p, k) => {
+        if (!closed && (k === 0 || k === n - 1)) return p;
+        const a = pts[(k - 1 + n) % n], b = pts[(k + 1) % n];
+        return [(a[0] + 2 * p[0] + b[0]) / 4, (a[1] + 2 * p[1] + b[1]) / 4];
+      });
+    }
+    LINES.push(pts.map(([x, z]) => V3(x, surfY(x, z) + lift, z)));
   }
 }
 
@@ -777,8 +807,21 @@ function buildHead(p) {
   if (spec.edgeR) LINES.push(circle(spec.edgeR, spec.top(spec.edgeR) + yOff));   // inner edge of a chamfered top
   const eng = engravingRecess(p, spec.R);
   const recess = eng || (p.drive === 'none' || p.drive === 'custom' ? () => 0 : makeRecess(p.drive, spec.R));
-  add(buildTop(spec.R, spec.top, recess, 0.06 * p.d, Math.max(128, Math.round(p.segments) * 4), eng ? 220 : 130), yOff);
-  recessOutline(recess, spec.top, spec.R, yOff, eng ? Math.min(spec.R * 0.01, p.engDepth * 0.4) : spec.R * 0.01);
+  // engravings get a finer head-top mesh so their walls are crisp and match the drawn contours
+  add(buildTop(spec.R, spec.top, recess, 0.06 * p.d, eng ? 720 : Math.max(128, Math.round(p.segments) * 4), eng ? 300 : 130), yOff);
+  // the cut surface exactly as the mesh builds it (depth limited by the head's thickness)
+  const minY = 0.06 * p.d;
+  const surfY = (x, z) => { const t = spec.top(Math.hypot(x, z)); return t - Math.min(recess(x, z), Math.max(0, t - minY)) + yOff; };
+  const lift = spec.R * 0.008;
+  if (eng) {
+    // top edge: where the cut starts, drawn at rim height so the wall slope never buries it
+    const rimY = (x, z) => spec.top(Math.hypot(x, z)) + yOff;
+    recessContour(recess, rimY, spec.R, p.engDepth * 0.03, lift);
+    // floor edge: where the cut has reached full depth, drawn on the flat floor (shows the depth)
+    recessContour(recess, surfY, spec.R, p.engDepth * 0.97, lift);
+  } else {
+    recessContour(recess, surfY, spec.R, spec.R * 0.01, lift);       // drive opening
+  }
   return geoms;
 }
 
@@ -859,7 +902,7 @@ const toneRamp = (() => {
   return t;
 })();
 const material = new THREE.MeshToonMaterial({side: THREE.DoubleSide, toneMapped: false, color: 0xffffff, gradientMap: toneRamp,
-  polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1});   // lets lines on the surface win the depth test
+  polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2});   // lets lines lying on the surface win the depth test
 // No visible fill for now: the body only writes depth, so lines behind it stay hidden but nothing is painted.
 material.colorWrite = false;
 const lineMat = new LineMaterial({color: 0x000000, linewidth: LINE_PX, worldUnits: false, toneMapped: false});
@@ -975,7 +1018,8 @@ function rebuild() {
   grid.scale.setScalar(r * 6000);
   grid.position.set(sph.center.x, box.min.y - 0.02, sph.center.z);
   grid.visible = state.grid;
-  edgeMat.uniforms.uGap.value = r * 0.06;
+  // only real overlaps (nut on bolt, head over shank) count, never the walls of a recess or engraving
+  edgeMat.uniforms.uGap.value = Math.max(r * 0.15, state.d * 0.5, state.drive === "custom" ? state.engDepth * 1.6 : 0);
   main.style.color = light ? '#222' : '';
   floor.material.opacity = light ? 0.25 : 0.4;
   key.position.set(sph.center.x + r * 2, sph.center.y + r * 3, sph.center.z + r * 1.6);
