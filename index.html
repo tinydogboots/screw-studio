@@ -164,7 +164,8 @@ import { LineMaterial } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/example
 const HEADS = [['pan','Pan'],['button','Button'],['truss','Truss'],['cheese','Cheese'],['socket','Socket cap'],
   ['flat','Flat / countersunk'],['oval','Raised countersunk'],['hex','Hex'],['none','None (threaded rod)']];
 const DRIVES = [['phillips','Phillips'],['pozidriv','Pozidriv'],['slotted','Slotted'],['hex','Hex socket'],
-  ['torx','Torx / star'],['square','Square (Robertson)'],['custom','Custom image'],['none','None']];
+  ['torx','Torx / star'],['square','Square (Robertson)'],['trans','Trans symbol'],['nonbinary','Nonbinary symbol'],['female','Female symbol'],['femme','Femme symbol'],
+  ['custom','Custom image'],['none','None']];
 const FINISHES = {
   steel:{name:'Bright steel',color:'#b9bdc3',metal:1,rough:0.30},
   stainless:{name:'Stainless',color:'#d8dbe0',metal:1,rough:0.18},
@@ -391,8 +392,9 @@ function syncUI() {
   off('runout', noThread); off('endScale', noThread || state.runout === 0); off('leftHand', noThread);
   off('drive', state.head === 'hex' || state.head === 'none');
   try { syncExport(); } catch {}   // export formats depend on the style
-  const engOn = state.drive === 'custom' && state.head !== 'hex' && state.head !== 'none';
+  const engOn = isEngraved(state.drive) && state.head !== 'hex' && state.head !== 'none';
   for (const k of ['engImg', 'engScale', 'engDepth', 'engRot', 'engInvert']) inputs[k].row.hidden = !engOn;
+  inputs.engImg.row.hidden = !engOn || state.drive !== 'custom';   // built-in symbols need no upload
   inputs.engImg.s.pick.textContent = ENG.name ? ENG.name : 'Choose file';
   off('headScale', state.head === 'none');
   off('flange', ['flat','oval','none'].includes(state.head));
@@ -704,14 +706,36 @@ function makeRecess(drive, q) {
     default: return () => 0;
   }
 }
+/* Built-in symbol engravings (vector paths, filled = cut). They use the same size / depth /
+   rotation / invert controls as an uploaded image. */
+const SYMBOLS = {
+  trans:     {vb: '0 0 117 118.72', d: 'M103.66,34.46l-2.64-14.44c-.03-.19-.07-.36-.12-.54-.52-1.78-2.01-3.11-3.84-3.42l-14.44-2.64c-6.22-1.03-7.93,8.22-1.72,9.46l5.71,1.04-14.99,15c-7.46-5.09-18.82-5.08-26.27.01l-5.71-5.71,3.63-.62c6.21-1.17,4.63-10.43-1.61-9.47l-5.47.93.92-4.65c1.1-6.22-8.12-8.03-9.44-1.86l-.61,3.09c-2.7-2.86-5.98-6.71-9.92-3.13-3.3,3.67-.3,6.78,2.54,9.35l-2.7.46c-5.72.94-4.94,9.58.8,9.55.39.06,5.77-.93,6.29-1l-.92,4.64c-.79,7.17,9.46,8.23,9.86-.33l5.45,5.45c-9.93,13.45-1.38,34.59,14.91,37.48v4.74c-4.1.13-11.02-1.32-11.22,4.8.2,6.12,7.14,4.67,11.22,4.81.16,4.07-1.39,11.44,4.81,11.58,6.25-.18,4.62-7.47,4.8-11.58,4.03-.04,10.29,1.04,10.5-4.81-.2-5.85-6.47-4.76-10.5-4.8v-4.61c16.67-2.52,25.64-23.97,15.54-37.63l14.72-14.72.97,5.3c1.26,6.21,10.48,4.48,9.45-1.73h0ZM58.5,74.05c-19.3-.35-19.3-29.03,0-29.38C77.8,45.02,77.8,73.7,58.5,74.05Z'},
+  nonbinary: {vb: '0 0 144 144', d: 'M77.05,40.95v-6.13l3.97,2.53h0c2.34,1.39,5.37.67,6.83-1.63,1.46-2.3.84-5.34-1.42-6.88l-5.02-3.2,5.03-3.2h0c2.29-1.52,2.94-4.6,1.47-6.92-1.48-2.32-4.54-3.03-6.89-1.6l-3.97,2.53v-3.66c.03-1.35-.49-2.66-1.44-3.63s-2.25-1.51-3.61-1.51-2.65.54-3.6,1.51c-.95.97-1.47,2.28-1.44,3.63v3.66l-3.97-2.53c-2.35-1.43-5.41-.72-6.89,1.6-1.48,2.32-.82,5.4,1.47,6.92l5.04,3.2-5.04,3.2c-1.16.71-1.98,1.85-2.29,3.17-.3,1.31-.07,2.71.66,3.85.73,1.14,1.88,1.94,3.21,2.22,1.33.29,2.71.02,3.84-.72l3.97-2.53v6.12c-14.95,2.43-26.4,15.43-26.4,31.06,0,17.34,14.11,31.44,31.44,31.44s31.45-14.11,31.45-31.44c0-15.63-11.45-28.63-26.4-31.06h0ZM72,93.36c-5.66,0-11.09-2.25-15.1-6.26-4.01-4-6.26-9.44-6.25-15.1,0-5.66,2.25-11.1,6.25-15.1,4.01-4.01,9.44-6.26,15.11-6.26,5.66,0,11.09,2.25,15.1,6.26,4,4.01,6.25,9.44,6.25,15.1,0,5.66-2.26,11.09-6.26,15.1s-9.44,6.25-15.1,6.25h0Z'},
+  female:    {vb: '0 0 135 135', d: 'M98.75,67.5c0-17.23-14.02-31.25-31.25-31.25s-31.25,14.02-31.25,31.25c0,15.26,11,28,25.48,30.71v5.87h-9.53c-3.23,0-5.86,2.63-5.86,5.86s2.63,5.86,5.86,5.86h9.53v9.87c0,3.24,2.63,5.86,5.86,5.86s5.86-2.62,5.86-5.86v-9.87h9.53c3.24,0,5.86-2.62,5.86-5.86s-2.62-5.86-5.86-5.86h-9.53v-5.9c14.39-2.79,25.3-15.49,25.3-30.68h0ZM47.97,67.5c0-5.18,2.06-10.15,5.72-13.81,3.66-3.66,8.63-5.72,13.81-5.72s10.15,2.06,13.81,5.72c3.66,3.66,5.72,8.63,5.72,13.81s-2.06,10.15-5.72,13.81c-3.66,3.66-8.63,5.72-13.81,5.72-5.18,0-10.14-2.07-13.8-5.73-3.66-3.66-5.73-8.62-5.73-13.8h0Z'},
+  femme:     {vb: '0 0 135 135', d: 'M96.52,106.2h-23.04v-7.89c14.45-2.8,25.41-15.55,25.41-30.82,0-17.31-14.08-31.39-31.39-31.39s-31.39,14.08-31.39,31.4c0,15.32,11.05,28.12,25.6,30.85v7.85s-23.03,0-23.03,0c-1.58-.02-3.11.58-4.23,1.69-1.13,1.11-1.76,2.62-1.76,4.2s.63,3.09,1.76,4.2c1.12,1.1,2.65,1.71,4.23,1.68h23.03v7.95c0,3.26,2.64,5.89,5.89,5.89s5.88-2.63,5.88-5.89v-7.95h23.04c1.57.03,3.1-.58,4.23-1.68,1.12-1.11,1.76-2.62,1.76-4.2s-.64-3.09-1.76-4.2c-1.13-1.11-2.66-1.71-4.23-1.69h0ZM47.88,67.49c0-5.2,2.07-10.19,5.75-13.87,3.68-3.68,8.67-5.74,13.87-5.74,5.2,0,10.19,2.06,13.87,5.74,3.68,3.68,5.75,8.67,5.75,13.87s-2.07,10.19-5.75,13.87c-3.67,3.68-8.66,5.75-13.87,5.75-5.2,0-10.18-2.07-13.86-5.75-3.68-3.68-5.75-8.67-5.75-13.86h0Z'},
+};
+const SYMBOL_MASKS = {};
+const isEngraved = drive => drive === 'custom' || drive in SYMBOLS;
+function loadSymbolMasks() {
+  for (const [key, sym] of Object.entries(SYMBOLS)) {
+    const [, , w, h] = sym.vb.split(' ').map(Number);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${sym.vb}" width="${w * 8}" height="${h * 8}"><path fill="#000" d="${sym.d}"/></svg>`;
+    maskFromImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg), m => {
+      SYMBOL_MASKS[key] = m;
+      if (state.drive === key) schedule();   // first draw of a symbol already selected
+    });
+  }
+}
+
 /* Custom engraving: an uploaded image becomes the recess on the head top.
    Transparent images cut where they are opaque; opaque images cut where they are dark. */
 const ENG = {mask: null, N: 256, name: ''};
 const ENG_KEY = 'screw-studio-engraving';
 function engravingRecess(p, R) {
-  if (p.drive !== 'custom') return null;
-  if (!ENG.mask) return () => 0;
-  const N = ENG.N, m = ENG.mask, S = R * p.engScale / 100, D = p.engDepth;
+  if (!isEngraved(p.drive)) return null;
+  const mask = p.drive === 'custom' ? ENG.mask : SYMBOL_MASKS[p.drive];
+  if (!mask) return () => 0;
+  const N = ENG.N, m = mask, S = R * p.engScale / 100, D = p.engDepth;
   const a = THREE.MathUtils.degToRad(-p.engRot), ca = Math.cos(a), sa = Math.sin(a);
   const at = (i, j) => m[Math.min(N - 1, Math.max(0, j)) * N + Math.min(N - 1, Math.max(0, i))];
   return (x, z) => {
@@ -725,6 +749,16 @@ function engravingRecess(p, R) {
   };
 }
 function loadEngraving(src, name, done) {
+  maskFromImage(src, m => {
+    ENG.mask = m; ENG.name = name;
+    // remember the original upload (re-processing it gives the same result next visit)
+    try { localStorage.setItem(ENG_KEY, JSON.stringify({name, src})); }
+    catch { try { localStorage.removeItem(ENG_KEY); } catch {} }   // too big to keep: it just won't come back after a reload
+    done && done();
+  });
+}
+// any image -> cut mask (1 = cut): transparent art cuts its opaque shapes, flat art cuts its dark marks
+function maskFromImage(src, done) {
   const img = new Image();
   img.onload = () => {
     const N = ENG.N, c = document.createElement('canvas'); c.width = c.height = N;
@@ -742,11 +776,7 @@ function loadEngraving(src, name, done) {
       const lum = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255, al = d[i * 4 + 3] / 255;
       m[i] = transparent ? al : (1 - lum) * al;   // transparent art: cut the opaque shapes; flat art: cut the dark marks
     }
-    ENG.mask = m; ENG.name = name;
-    // remember the original upload (re-processing it gives the same result next visit)
-    try { localStorage.setItem(ENG_KEY, JSON.stringify({name, src})); }
-    catch { try { localStorage.removeItem(ENG_KEY); } catch {} }   // too big to keep: it just won't come back after a reload
-    done && done();
+    done(m);
   };
   img.onerror = () => { say('That file could not be read as an image. Try a PNG, JPG or SVG.'); };
   img.src = src;
@@ -1124,7 +1154,7 @@ function rebuild() {
   grid.position.set(sph.center.x, box.min.y - 0.02, sph.center.z);
   grid.visible = state.grid;
   // only real overlaps (nut on bolt, head over shank) count, never the walls of a recess or engraving
-  edgeMat.uniforms.uGap.value = Math.max(r * 0.15, state.d * 0.5, state.drive === "custom" ? state.engDepth * 1.6 : 0);
+  edgeMat.uniforms.uGap.value = Math.max(r * 0.15, state.d * 0.5, isEngraved(state.drive) ? state.engDepth * 1.6 : 0);
   main.style.color = light ? '#222' : '';
   key.position.set(sph.center.x + r * 0.6, sph.center.y + r * 4, sph.center.z + r * 1.2);   // mostly overhead: shadow sits under the part
   key.target.position.copy(sph.center);
@@ -1521,6 +1551,7 @@ document.getElementById('random').onclick = () => {
 };
 
 syncUI(); resize(); rebuild(); fitView();
+loadSymbolMasks();
 // bring back the last uploaded engraving image, if any
 try {
   const saved = JSON.parse(localStorage.getItem(ENG_KEY) || 'null');
