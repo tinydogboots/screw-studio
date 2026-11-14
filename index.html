@@ -103,7 +103,7 @@
 <script>
   // If the 3D engine fails to start, say why on the loading screen instead of waiting forever.
   (function () {
-    const show = msg => { const el = document.getElementById('loading'); if (el) el.textContent = msg; };
+    const show = msg => { const el = document.getElementById('loading'); if (el && !el.dataset.final) el.textContent = msg; };
     addEventListener('error', e => show('3D engine failed to start: ' + (e.message || 'a script could not load') + '. Reload the page to try again.'), true);
     addEventListener('unhandledrejection', e => show('3D engine failed to start: ' + (e.reason && e.reason.message || e.reason) + '.'));
     setTimeout(() => show('The 3D engine is taking too long to load. Check your connection and reload the page.'), 15000);
@@ -638,7 +638,18 @@ function buildHead(p) {
 
 /* ================= scene ================= */
 const main = document.querySelector('main');
-const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true});
+syncUI();  // fill the panel even if 3D can't start
+let renderer;
+try { renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true}); }
+catch (e) {
+  const el = document.getElementById('loading');
+  el.dataset.final = '1';
+  el.style.cssText += ';padding:24px;text-align:center;line-height:1.5;max-width:52ch;margin:auto';
+  el.textContent = 'This browser has 3D graphics (WebGL) turned off, so the model can’t be drawn. '
+    + 'In Chrome: Settings → System → turn on “Use graphics acceleration when available”, then relaunch Chrome. '
+    + 'Or open this page in Safari.';
+  throw e;
+}
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
