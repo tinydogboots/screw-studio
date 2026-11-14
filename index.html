@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Screw Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300;0,400;1,300&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: paper control panel on the left, dark "infinite grid" stage on the right.
+     Type contrast: a light grotesk set huge and tight for display, tiny grotesk caps for labels,
+     monospace only for numbers and values. Panel is deliberately light, stage deliberately dark. */
+  :root{
+    color-scheme: light;
+    --paper:#f9f8f5; --ink:#333333; --ink-strong:#101010; --well:#efeee9; --muted:#8b887f; --rule:rgba(51,51,51,.85);
+    --stage:#2b2b2a; --stage-ink:#f4f3ef; --stage-muted:rgba(244,243,239,.6);
+    --mono:"JetBrains Mono", SFMono-Regular, Consolas, Menlo, monospace;
+    --grot:"Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);font:12.5px/1.15 var(--mono);text-transform:uppercase;letter-spacing:.02em}
+  button,select,input,option{font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit}
+  button{background:none;border:0;padding:0;cursor:pointer;text-align:left}
+  :focus-visible{outline:1px dotted var(--ink-strong);outline-offset:2px}
+
+  #app{display:grid;grid-template-columns:300px minmax(0,1fr);height:100%}
+
+  /* ---- control panel ---- */
+  #panel{display:flex;flex-direction:column;min-height:0;border-right:1px dotted var(--rule);padding-left:env(safe-area-inset-left, 0px)}
+  #controls{flex:1;overflow-y:auto;padding:6px 0 18px}
+  .brand{padding:14px 10px 12px;border-bottom:1px dotted var(--rule);font-family:var(--grot)}
+  .brand-big{display:block;font-weight:300;font-size:52px;line-height:.8;letter-spacing:-.055em;margin-left:-3px}
+  .brand-it{display:block;font-weight:300;font-style:italic;font-size:26px;line-height:.95;letter-spacing:-.04em;margin-top:4px}
+  .brand-fine{display:block;font-size:10.5px;line-height:1.25;letter-spacing:.01em;margin-top:10px;max-width:30ch}
+  .grp{margin-top:16px}
+  .grp h3{display:flex;align-items:baseline;gap:6px;margin:0;font:300 italic 21px/1 var(--grot);letter-spacing:-.035em;padding:0 8px;position:relative}
+  .grp h3::after{content:"";flex:1;border-top:1px dotted var(--rule);order:1;margin:0 2px;align-self:center}
+  .grp h3 span{background:var(--paper);order:0}
+  .grp h3 .fold{order:2;width:14px;text-align:center;font:12px var(--mono);font-style:normal;letter-spacing:0}
+  .row label,.check,.tools button,.frow > span:first-child,.exportbtn > span{font-family:var(--grot);font-size:11.5px;letter-spacing:.02em}
+  .grp-body{background:var(--well);padding:2px 8px 6px;margin-top:6px}
+  .grp.closed .grp-body{display:none}
+  .row{padding-top:10px}
+  .row .line{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .row label{flex:none}
+  .num{display:inline-flex;align-items:baseline;gap:3px;min-width:0}
+  .num input{width:7ch;background:none;border:0;padding:0;text-align:right;border-bottom:1px solid transparent}
+  .num input:focus{outline:none;border-bottom:1px dotted var(--ink)}
+  .unit{color:var(--muted);font-size:11px}
+  select{appearance:none;-webkit-appearance:none;background:none;border:0;padding:0 0 1px;text-align:right;text-align-last:right;
+    cursor:pointer;min-width:0;max-width:76%;text-overflow:ellipsis;text-decoration:underline dotted;text-underline-offset:3px}
+  input[type=color]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1px solid var(--ink);padding:0;background:none;cursor:pointer}
+  input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+  input[type=color]::-webkit-color-swatch{border:0}
+  input[type=color]::-moz-color-swatch{border:0}
+  .check{display:block;width:100%;padding:0}
+  .check:hover{color:var(--ink-strong)}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;display:block;width:100%;height:22px;margin:2px 0 0;background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:1px;background:rgba(51,51,51,.45)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:1px;height:10px;margin-top:-4.5px;background:var(--ink);border:0;border-radius:0;
+    box-shadow:0 0 0 3px transparent}
+  input[type=range]:hover::-webkit-slider-runnable-track,input[type=range]:focus::-webkit-slider-runnable-track{background:var(--ink)}
+  input[type=range]::-moz-range-track{height:1px;background:rgba(51,51,51,.45)}
+  input[type=range]::-moz-range-thumb{width:1px;height:10px;background:var(--ink);border:0;border-radius:0}
+  input[type=range]:focus{outline:none}
+  input[type=range]:focus-visible::-webkit-slider-thumb{width:3px}
+
+  .off{opacity:.35;pointer-events:none}
+
+  footer{border-top:1px dotted var(--rule);padding:10px 8px calc(10px + env(safe-area-inset-bottom, 0px));display:flex;flex-direction:column;gap:10px;background:var(--paper)}
+  .frow{display:flex;justify-content:space-between;align-items:baseline}
+  .tools{gap:6px;justify-content:flex-start;padding-bottom:10px;border-bottom:1px dotted var(--rule)}
+  .tools button{border:1px dotted var(--ink);border-radius:999px;padding:5px 11px 4px}
+  .tools button:hover{background:var(--ink);color:var(--paper);border-style:solid}
+  .fmt{display:flex;gap:12px}
+  .fmt button{color:var(--muted)}
+  .fmt button[aria-pressed="true"]{color:var(--ink-strong);text-decoration:underline;text-underline-offset:3px}
+  .exportbtn{display:flex;justify-content:space-between;align-items:center;height:40px;padding:0 10px;background:var(--ink);color:var(--paper)}
+  .exportbtn:hover{background:var(--ink-strong)}
+  kbd{font:10px var(--mono);border:1px solid rgba(249,248,245,.45);padding:2px 4px}
+  #status{min-height:14px;font-size:11px;color:var(--muted)}
+
+  /* ---- canvas ---- */
+  main{position:relative;min-width:0;min-height:0;background:var(--stage);color:var(--stage-ink)}
+  main canvas{display:block;width:100%;height:100%}
+  #label{position:absolute;left:22px;top:20px;pointer-events:none;max-width:calc(100% - 44px);font-family:var(--grot)}
+  #label .kicker{display:block;font-weight:300;font-style:italic;font-size:clamp(18px, 2.3vw, 34px);line-height:1;letter-spacing:-.04em}
+  #label .big{display:block;font-weight:300;font-size:clamp(54px, 9.5vw, 168px);line-height:.8;letter-spacing:-.06em;margin:.06em 0 0 -.04em;white-space:nowrap}
+  #label .fine{display:block;font-size:10.5px;line-height:1.3;letter-spacing:.02em;margin-top:14px;max-width:36ch;color:var(--stage-muted)}
+  #hint{position:absolute;right:max(18px, env(safe-area-inset-right, 0px));bottom:16px;color:var(--stage-muted);font:10.5px var(--grot);letter-spacing:.03em;pointer-events:none}
+  #loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--stage-muted)}
+
+  @media (max-width:760px){
+    #app{display:flex;flex-direction:column;height:auto}
+    main{height:56vh;order:1;border-bottom:1px dotted var(--rule)}
+    #panel{order:2;border:0;padding-right:env(safe-area-inset-right, 0px)}
+    #controls{overflow:visible}
+    #hint{display:none}
+  }
+</style>
+<script>
+  // If the 3D engine fails to start, say why on the loading screen instead of waiting forever.
+  (function () {
+    const show = msg => { const el = document.getElementById('loading'); if (el) el.textContent = msg; };
+    addEventListener('error', e => show('3D engine failed to start: ' + (e.message || 'a script could not load') + '. Reload the page to try again.'), true);
+    addEventListener('unhandledrejection', e => show('3D engine failed to start: ' + (e.reason && e.reason.message || e.reason) + '.'));
+    setTimeout(() => show('The 3D engine is taking too long to load. Check your connection and reload the page.'), 15000);
+  })();
+</script>
+
+<div id="app">
+  <aside id="panel" aria-label="Controls">
+    <div id="controls">
+      <header class="brand">
+        <span class="brand-big">Screw</span>
+        <i class="brand-it">Studio</i>
+        <span class="brand-fine">Screws, bolts and matching nuts. Shape them, orbit them, export PNG or STL.</span>
+      </header>
+    </div>
+    <footer>
+      <div class="frow tools">
+        <button type="button" id="fit">Fit view</button>
+        <button type="button" id="random">Randomize</button>
+        <button type="button" id="reset">Reset</button>
+      </div>
+      <div class="frow"><span>Output format</span>
+        <span class="fmt"><button type="button" data-fmt="png" aria-pressed="true">PNG</button><button type="button" data-fmt="stl" aria-pressed="false">STL</button></span></div>
+      <button type="button" class="check" id="transparent">[ ] Transparent background</button>
+      <button type="button" class="exportbtn" id="export"><span>Export</span><kbd>cmd + S</kbd></button>
+      <div id="status" role="status"></div>
+    </footer>
+  </aside>
+  <main>
+    <div id="loading">Loading 3D engine…</div>
+    <div id="label"></div>
+    <div id="hint">Drag orbit · right-drag pan · scroll zoom</div>
+  </main>
+</div>
+
+<script type="module">
+// Full CDN URLs, no import map: the hosted viewer can load scripts before an import map,
+// which makes the browser ignore it. These ESM builds all share one copy of three.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/+esm';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js/+esm';
+import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/environments/RoomEnvironment.js/+esm';
+import { STLExporter } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/STLExporter.js/+esm';
+
+/* ================= configuration ================= */
+const HEADS = [['pan','Pan'],['button','Button'],['truss','Truss'],['cheese','Cheese'],['socket','Socket cap'],
+  ['flat','Flat / countersunk'],['oval','Raised countersunk'],['hex','Hex'],['none','None (threaded rod)']];
+const DRIVES = [['phillips','Phillips'],['pozidriv','Pozidriv'],['slotted','Slotted'],['hex','Hex socket'],
+  ['torx','Torx / star'],['square','Square (Robertson)'],['none','None']];
+const FINISHES = {
+  steel:{name:'Bright steel',color:'#b9bdc3',metal:1,rough:0.30},
+  stainless:{name:'Stainless',color:'#d8dbe0',metal:1,rough:0.18},
+  zinc:{name:'Zinc plated',color:'#c6d2de',metal:1,rough:0.26},
+  yellowzinc:{name:'Yellow zinc',color:'#d8bf6e',metal:1,rough:0.28},
+  brass:{name:'Brass',color:'#d2a64c',metal:1,rough:0.22},
+  copper:{name:'Copper',color:'#c77b4a',metal:1,rough:0.25},
+  gold:{name:'Gold',color:'#e8c45c',metal:1,rough:0.14},
+  titanium:{name:'Titanium',color:'#928b84',metal:1,rough:0.34},
+  black:{name:'Black oxide',color:'#2b2c30',metal:0.75,rough:0.42},
+  nylon:{name:'White nylon',color:'#e9e6df',metal:0,rough:0.55},
+  custom:{name:'Custom colour',color:null,metal:0.9,rough:null},
+};
+const DEFAULTS = {
+  showScrew:true, showNut:false,
+  head:'pan', headScale:1, drive:'phillips', flange:false,
+  d:6, length:30, threadLen:100, tip:'chamfer', pointLen:1.3,
+  profile:'metric', autoPitch:true, pitch:1, threadScale:1, leftHand:false,
+  runout:0, endScale:0.3,
+  nutEdges:6, nutWidth:1.6, nutHeight:0.8, nutPos:70, clearance:0.05, nutChamfer:true,
+  segments:96,
+  rotX:0, rotY:0, rotZ:0,
+  finish:'zinc', color:'#8fb4ff', rough:0.26,
+  autoRotate:true, grid:true, wire:false, bg:'#2b2b2a',
+};
+const PRESETS = {
+  'Machine screw M4×16 · pan Phillips': {head:'pan',drive:'phillips',d:4,length:16,finish:'zinc'},
+  'Socket cap M6×30 · hex socket':      {head:'socket',drive:'hex',d:6,length:30,threadLen:65,finish:'black'},
+  'Hex bolt M12×60 with nut':           {head:'hex',drive:'none',d:12,length:60,threadLen:50,finish:'steel',flange:true,showNut:true,nutPos:72},
+  'Wood screw 5×50 · countersunk Pozi': {head:'flat',drive:'pozidriv',d:5,length:50,threadLen:60,tip:'point',profile:'wood',finish:'yellowzinc'},
+  'Deck screw 5×70 · Torx':             {head:'flat',drive:'torx',d:5,length:70,threadLen:65,tip:'point',pointLen:1.6,profile:'wood',finish:'black'},
+  'Brass screw 4×25 · raised csk slot': {head:'oval',drive:'slotted',d:4,length:25,threadLen:70,tip:'point',profile:'wood',finish:'brass'},
+  'Button head M8×20 · hex socket':     {head:'button',drive:'hex',d:8,length:20,finish:'stainless'},
+  'Threaded rod M8×50 + nut':           {head:'none',d:8,length:50,finish:'zinc',showNut:true,nutPos:40},
+  'Printable bolt 20 mm · chunky':      {head:'hex',d:20,length:40,pitch:4,autoPitch:false,threadScale:1.2,runout:1,endScale:0.2,
+                                         finish:'nylon',showNut:true,nutPos:100,clearance:0.3,segments:64},
+  'Nut only · M10 square':              {showScrew:false,showNut:true,d:10,nutEdges:4,nutWidth:1.7,nutHeight:0.9,finish:'stainless'},
+};
+const mm = v => (+v).toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '');
+const SCHEMA = [
+  {section:'Generate'},
+  {key:'showScrew', label:'Screw', type:'check'},
+  {key:'showNut', label:'Nut', type:'check'},
+  {section:'Head', group:'screw'},
+  {key:'head', label:'Style', type:'select', options:HEADS},
+  {key:'headScale', label:'Head size', type:'range', min:0.6, max:1.6, step:0.05, unit:'×'},
+  {key:'drive', label:'Drive', type:'select', options:DRIVES},
+  {key:'flange', label:'Flange / washer', type:'check'},
+  {section:'Shank', group:'screw'},
+  {key:'d', label:'Diameter', type:'range', min:1, max:40, step:0.5, unit:'mm'},
+  {key:'length', label:'Length', type:'range', min:3, max:200, step:1, unit:'mm'},
+  {key:'threadLen', label:'Threaded', type:'range', min:5, max:100, step:1, unit:'%'},
+  {key:'tip', label:'Tip', type:'select', options:[['flat','Flat'],['chamfer','Chamfered'],['point','Pointed (spike)']]},
+  {key:'pointLen', label:'Spike length', type:'range', min:0.3, max:4, step:0.05, unit:'×d'},
+  {section:'Thread'},
+  {key:'profile', label:'Profile', type:'select', options:[['metric','Metric 60°'],['wood','Wood / coarse'],['none','None (smooth)']]},
+  {key:'autoPitch', label:'Standard pitch', type:'check'},
+  {key:'pitch', label:'Pitch', type:'range', min:0.2, max:10, step:0.05, unit:'mm'},
+  {key:'threadScale', label:'Thread depth', type:'range', min:0.3, max:1.6, step:0.05, unit:'×'},
+  {key:'runout', label:'End taper', type:'range', min:0, max:5, step:0.25, unit:'turns'},
+  {key:'endScale', label:'Taper to', type:'range', min:0, max:1, step:0.05, unit:'×'},
+  {key:'leftHand', label:'Left-hand', type:'check'},
+  {key:'segments', label:'Segments', type:'range', min:16, max:192, step:4, unit:''},
+  {section:'Nut', group:'nut'},
+  {key:'nutEdges', label:'Outside edges', type:'range', min:3, max:16, step:1, unit:''},
+  {key:'nutWidth', label:'Across flats', type:'range', min:1.2, max:3, step:0.05, unit:'×d'},
+  {key:'nutHeight', label:'Height', type:'range', min:0.3, max:2, step:0.05, unit:'×d'},
+  {key:'nutPos', label:'Position', type:'range', min:0, max:100, step:1, unit:'%'},
+  {key:'clearance', label:'Clearance', type:'range', min:0, max:1, step:0.01, unit:'mm'},
+  {key:'nutChamfer', label:'Chamfered', type:'check'},
+  {section:'Finish'},
+  {key:'finish', label:'Material', type:'select', options:Object.entries(FINISHES).map(([k,v])=>[k,v.name])},
+  {key:'color', label:'Colour', type:'color'},
+  {key:'rough', label:'Roughness', type:'range', min:0.05, max:0.9, step:0.01, unit:''},
+  {section:'Placement & view'},
+  {key:'rotX', label:'Rotate X', type:'range', min:-180, max:180, step:1, unit:'°'},
+  {key:'rotY', label:'Rotate Y', type:'range', min:-180, max:180, step:1, unit:'°'},
+  {key:'rotZ', label:'Rotate Z', type:'range', min:-180, max:180, step:1, unit:'°'},
+  {key:'autoRotate', label:'Turntable', type:'check'},
+  {key:'grid', label:'Floor grid', type:'check'},
+  {key:'wire', label:'Wireframe', type:'check'},
+  {key:'bg', label:'Background', type:'color'},
+];
+
+/* ================= state ================= */
+const STORE_KEY = 'screw-studio-v4';
+const state = {...DEFAULTS};
+try { const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  if (saved) for (const k in DEFAULTS) if (k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
+if (!state.showScrew && !state.showNut) state.showScrew = true;
+
+/* ================= UI ================= */
+const inputs = {}, groups = {};
+const ctl = document.getElementById('controls');
+const mark = on => on ? '[*] ' : '[ ] ';
+let activePreset = '';
+let groupBody = ctl;
+const touched = () => { activePreset = ''; };
+for (const s of SCHEMA) {
+  if (s.section) {
+    const sec = document.createElement('section'); sec.className = 'grp';
+    const h = document.createElement('h3');
+    const t = document.createElement('span'); t.textContent = s.section;
+    const fold = document.createElement('button'); fold.type = 'button'; fold.className = 'fold'; fold.textContent = '-';
+    fold.setAttribute('aria-label', 'Collapse ' + s.section); fold.setAttribute('aria-expanded', 'true');
+    fold.onclick = () => { const c = sec.classList.toggle('closed'); fold.textContent = c ? '+' : '-';
+      fold.setAttribute('aria-expanded', String(!c)); fold.setAttribute('aria-label', (c ? 'Expand ' : 'Collapse ') + s.section); };
+    h.append(t, fold);
+    groupBody = document.createElement('div'); groupBody.className = 'grp-body';
+    sec.append(h, groupBody); ctl.appendChild(sec);
+    if (s.group) groups[s.group] = (groups[s.group] || []).concat(sec);
+    continue;
+  }
+  const row = document.createElement('div'); row.className = 'row';
+  const id = 'c_' + s.key;
+  let el, num;
+  if (s.type === 'check') {
+    el = document.createElement('button'); el.type = 'button'; el.className = 'check'; el.id = id;
+    el.setAttribute('role', 'switch');
+    el.onclick = () => {
+      state[s.key] = !state[s.key];
+      if (!state.showScrew && !state.showNut) state[s.key === 'showScrew' ? 'showNut' : 'showScrew'] = true;
+      touched(); syncUI(); schedule();
+    };
+    row.appendChild(el);
+  } else {
+    const line = document.createElement('div'); line.className = 'line';
+    const lab = document.createElement('label'); lab.htmlFor = id; lab.textContent = s.label; line.appendChild(lab);
+    if (s.type === 'select') {
+      el = document.createElement('select');
+      for (const [v, t] of s.options) el.add(new Option(t, v));
+      line.appendChild(el);
+    } else if (s.type === 'color') {
+      el = document.createElement('input'); el.type = 'color'; line.appendChild(el);
+    } else {
+      const box = document.createElement('span'); box.className = 'num';
+      num = document.createElement('input'); num.type = 'text'; num.inputMode = 'decimal'; num.id = id + '_n';
+      num.setAttribute('aria-label', s.label + (s.unit ? ' (' + s.unit + ')' : ''));
+      box.appendChild(num);
+      if (s.unit) { const u = document.createElement('span'); u.className = 'unit'; u.textContent = s.unit; box.appendChild(u); }
+      line.appendChild(box);
+      el = document.createElement('input'); el.type = 'range';
+      Object.assign(el, {min:s.min, max:s.max, step:s.step});
+      num.addEventListener('change', () => {
+        let v = parseFloat(num.value); if (isNaN(v)) { syncUI(); return; }
+        state[s.key] = Math.min(s.max, Math.max(s.min, v));
+        if (s.key === 'pitch') state.autoPitch = false;
+        touched(); syncUI(); schedule();
+      });
+      num.addEventListener('keydown', e => { if (e.key === 'Enter') num.blur(); });
+    }
+    row.appendChild(line);
+    if (s.type === 'range') row.appendChild(el);
+    el.id = id;
+    el.addEventListener('input', () => {
+      state[s.key] = s.type === 'range' ? parseFloat(el.value) : el.value;
+      if (s.key === 'pitch') state.autoPitch = false;
+      if (s.key === 'finish' && FINISHES[state.finish].rough != null) state.rough = FINISHES[state.finish].rough;
+      if (s.key === 'profile' && state.profile === 'wood' && state.tip === 'chamfer') state.tip = 'point';
+      touched(); syncUI(); schedule();
+    });
+  }
+  groupBody.appendChild(row);
+  inputs[s.key] = {el, s, row, num};
+}
+
+// preset picker, first row of the Generate group
+const presetSel = document.createElement('select'); presetSel.id = 'c_preset';
+presetSel.add(new Option('Custom', ''));
+for (const name in PRESETS) presetSel.add(new Option(name, name));
+presetSel.addEventListener('change', () => { if (presetSel.value) applyPreset(presetSel.value); else { activePreset = ''; } });
+{
+  const row = document.createElement('div'); row.className = 'row';
+  const line = document.createElement('div'); line.className = 'line';
+  const lab = document.createElement('label'); lab.htmlFor = 'c_preset'; lab.textContent = 'Preset';
+  line.append(lab, presetSel); row.appendChild(line);
+  ctl.querySelector('.grp-body').prepend(row);
+}
+// native dropdown lists ignore CSS text-transform on some systems, so uppercase option text directly
+for (const o of document.querySelectorAll('option')) o.text = o.text.toUpperCase();
+function applyPreset(name) {
+  const view = {autoRotate:state.autoRotate, grid:state.grid, wire:state.wire, bg:state.bg};
+  Object.assign(state, DEFAULTS, view, PRESETS[name]);
+  state.rough = FINISHES[state.finish].rough ?? state.rough;
+  activePreset = name;
+  syncUI(); rebuild(); fitView();
+}
+
+function syncUI() {
+  for (const k in inputs) {
+    const {el, s, num} = inputs[k];
+    if (s.type === 'check') { el.textContent = mark(state[k]) + s.label; el.setAttribute('aria-checked', String(!!state[k])); }
+    else el.value = state[k];
+    if (num && document.activeElement !== num) num.value = +(+state[k]).toFixed(3);
+  }
+  presetSel.value = activePreset;
+  const P = effectivePitch(state);
+  if (state.autoPitch) { inputs.pitch.el.value = P; inputs.pitch.num.value = P; }
+  const noThread = state.profile === 'none';
+  const off = (k, cond) => inputs[k].row.classList.toggle('off', !!cond);
+  off('autoPitch', noThread); off('pitch', noThread); off('threadScale', noThread);
+  off('runout', noThread); off('endScale', noThread || state.runout === 0); off('leftHand', noThread);
+  off('drive', state.head === 'hex' || state.head === 'none');
+  off('headScale', state.head === 'none');
+  off('flange', ['flat','oval','none'].includes(state.head));
+  off('pointLen', state.tip !== 'point');
+  off('nutPos', !state.showScrew);
+  off('color', state.finish !== 'custom');
+  for (const g of groups.screw) g.hidden = !state.showScrew;
+  for (const g of groups.nut) g.hidden = !state.showNut;
+  // diameter lives in the Shank group; move it into the Nut group in nut-only mode
+  moveDiameter(!state.showScrew);
+}
+let dMoved = false;
+function moveDiameter(toNut) {
+  if (toNut === dMoved) return;
+  const target = (toNut ? groups.nut[0] : groups.screw[1]).querySelector('.grp-body');
+  target.prepend(inputs.d.row);
+  dMoved = toNut;
+}
+
+/* ================= math ================= */
+const sat = x => Math.min(1, Math.max(0, x));
+const ss = (e0, e1, x) => { if (Math.abs(e1 - e0) < 1e-9) return x < e0 === e0 < e1 ? 0 : 1;
+  const t = sat((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); };
+const fract = x => x - Math.floor(x);
+const METRIC = [[1,.25],[1.6,.35],[2,.4],[2.5,.45],[3,.5],[4,.7],[5,.8],[6,1],[8,1.25],[10,1.5],[12,1.75],[14,2],[16,2],[20,2.5],[24,3],[30,3.5],[36,4],[42,4.5]];
+function effectivePitch(p) {
+  if (!p.autoPitch) return p.pitch;
+  if (p.profile === 'wood') return Math.round(p.d * 0.45 * 20) / 20;
+  if (p.d <= METRIC[0][0]) return METRIC[0][1];
+  for (let i = 1; i < METRIC.length; i++) {
+    const [d1, p1] = METRIC[i], [d0, p0] = METRIC[i - 1];
+    if (p.d <= d1) return +(p0 + (p1 - p0) * (p.d - d0) / (d1 - d0)).toFixed(2);
+  }
+  return 4.5;
+}
+function threadProfile(u, type) {
+  if (type === 'metric') { const v = 1 - Math.abs(u - 0.5) * 2; return sat((v - 0.12) / 0.8); }
+  if (type === 'wood') { const v = u < 0.32 ? u / 0.32 : (1 - u) / 0.68; return Math.pow(sat((v - 0.08) / 0.92), 1.25); }
+  return 0;
+}
+function sdBox(x, z, hx, hz) {
+  const dx = Math.abs(x) - hx, dz = Math.abs(z) - hz;
+  return Math.hypot(Math.max(dx, 0), Math.max(dz, 0)) + Math.min(Math.max(dx, dz), 0);
+}
+function sdHex(x, z, r) {
+  const kx = -0.866025404, ky = 0.5, kz = 0.577350269;
+  x = Math.abs(x); z = Math.abs(z);
+  const dt = 2 * Math.min(kx * x + ky * z, 0);
+  x -= dt * kx; z -= dt * ky;
+  x -= Math.min(Math.max(x, -kz * r), kz * r); z -= r;
+  return Math.hypot(x, z) * Math.sign(z);
+}
+
+/* Thread model shared by screw and nut so they always mesh. */
+function threadModel(p) {
+  const P = effectivePitch(p), R = p.d / 2;
+  let depth = 0;
+  if (p.profile === 'metric') depth = Math.min(0.54 * P, 0.34 * R);
+  if (p.profile === 'wood')   depth = Math.min(0.2 * p.d, 0.42 * P, 0.44 * R);
+  depth = Math.min(depth * p.threadScale, 0.6 * R);
+  const hand = p.leftHand ? -1 : 1;
+  // radius at angle fraction t (0..1) and height y, thread amplitude a (0..1)
+  const radius = (t, y, a) => a <= 0 || depth === 0 ? R
+    : R - depth * (1 - threadProfile(fract(y / P + hand * t), p.profile)) * a;
+  return {P, R, depth, rMin: R - depth, radius};
+}
+
+/* ================= geometry: grid helper ================= */
+function gridGeometry(rows, seg, vertex, outward = true) {
+  const pos = new Float32Array((rows + 1) * seg * 3);
+  let k = 0;
+  for (let i = 0; i <= rows; i++) for (let j = 0; j < seg; j++) {
+    const v = vertex(i, j); pos[k++] = v[0]; pos[k++] = v[1]; pos[k++] = v[2];
+  }
+  const idx = new Uint32Array(rows * seg * 6); let n = 0;
+  for (let i = 0; i < rows; i++) for (let j = 0; j < seg; j++) {
+    const j1 = (j + 1) % seg;
+    const a = i * seg + j, c = i * seg + j1, b = (i + 1) * seg + j, d = (i + 1) * seg + j1;
+    if (outward) { idx[n++]=a; idx[n++]=c; idx[n++]=b; idx[n++]=c; idx[n++]=d; idx[n++]=b; }
+    else         { idx[n++]=a; idx[n++]=b; idx[n++]=c; idx[n++]=c; idx[n++]=b; idx[n++]=d; }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeVertexNormals();
+  return g;
+}
+function ringCap(ring, y, up) {         // flat disc from a ring of [x,z] points
+  const pos = [0, y, 0], idx = [];
+  for (const [x, z] of ring) pos.push(x, y, z);
+  const n = ring.length;
+  for (let j = 0; j < n; j++) { const a = 1 + j, b = 1 + (j + 1) % n; up ? idx.push(0, b, a) : idx.push(0, a, b); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+function annulus(inner, outer, y, up) { // inner/outer: arrays of [x,z] at matching angles
+  const n = inner.length, pos = [], idx = [];
+  for (const [x, z] of inner) pos.push(x, y, z);
+  for (const [x, z] of outer) pos.push(x, y, z);
+  for (let j = 0; j < n; j++) {
+    const j1 = (j + 1) % n, I = j, I1 = j1, O = n + j, O1 = n + j1;
+    up ? idx.push(I, I1, O, I1, O1, O) : idx.push(I, O, I1, I1, O, O1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+
+/* ================= geometry: screw shank ================= */
+function buildShank(p, T) {
+  const {P, R, depth, rMin} = T, L = p.length;
+  const tStartY = -L + L * p.threadLen / 100;
+  const full = p.threadLen >= 100;
+  const runLen = p.runout * P;
+  const pointLen = p.tip === 'point' ? Math.min(L * 0.7, p.d * p.pointLen) : 0;
+  const ch = p.tip === 'chamfer' ? Math.min(Math.max(depth, R * 0.15) * 1.1, L * 0.15) : 0;
+  const topCh = p.head === 'none' ? Math.min(Math.max(depth, R * 0.15) * 1.1, L * 0.15) : 0;
+  const seg = Math.max(12, Math.round(p.segments));
+  const perPitch = Math.max(6, seg / 3.4);
+  const rows = depth > 0 ? Math.max(40, Math.min(4200, Math.ceil(L / P * perPitch))) : 60;
+  const amp = y => {
+    if (depth === 0) return 0;
+    let a = full || p.head === 'none'
+      ? (runLen > 0 ? p.endScale + (1 - p.endScale) * ss(0, -runLen, y) : 1)
+      : ss(tStartY, tStartY - Math.max(runLen, P * 0.6), y);
+    if (runLen > 0) a *= p.endScale + (1 - p.endScale) * ss(-L, -L + runLen, y);
+    return a;
+  };
+  const g = gridGeometry(rows, seg, (i, j) => {
+    const y = -L * i / rows, th = j / seg * Math.PI * 2;
+    let r = T.radius(j / seg, y, amp(y));
+    if (pointLen) { const s = sat((y + L) / pointLen);
+      if (s < 1) r = rMin * Math.pow(s, 0.85) + (r - rMin) * Math.min(1, s * 1.6); }
+    if (ch) r = Math.min(r, rMin * 0.92 + (R - rMin * 0.92) * sat((y + L) / ch));
+    if (topCh) r = Math.min(r, rMin * 0.92 + (R - rMin * 0.92) * sat(-y / topCh));
+    return [r * Math.cos(th), y, r * Math.sin(th)];
+  });
+  const parts = [g];
+  const pos = g.attributes.position.array;
+  const ringAt = i => Array.from({length:seg}, (_, j) => [pos[(i * seg + j) * 3], pos[(i * seg + j) * 3 + 2]]);
+  if (!pointLen) parts.push(ringCap(ringAt(rows), -L, false));
+  if (p.head === 'none') parts.push(ringCap(ringAt(0), 0, true));
+  return parts;
+}
+
+/* ================= geometry: nut ================= */
+function buildNut(p, T, yTop) {
+  const N = Math.max(3, Math.round(p.nutEdges));
+  const H = p.nutHeight * p.d, af = p.nutWidth * p.d, ap = af / 2;
+  const seg = N * Math.max(2, Math.ceil(Math.max(12, p.segments) / N));
+  const rows = T.depth > 0 ? Math.max(24, Math.ceil(H / T.P * Math.max(6, seg / 3.4))) : 4;
+  const yBot = yTop - H, c = p.clearance;
+  const inner = gridGeometry(rows, seg, (i, j) => {
+    const y = yTop - H * i / rows, th = j / seg * Math.PI * 2;
+    const r = T.radius(j / seg, y, 1) + c;
+    return [r * Math.cos(th), y, r * Math.sin(th)];
+  }, false);
+  const ip = inner.attributes.position.array;
+  const ring = i => Array.from({length:seg}, (_, j) => [ip[(i * seg + j) * 3], ip[(i * seg + j) * 3 + 2]]);
+  const polyR = th => ap / Math.cos(fract(th / (2 * Math.PI / N)) * (2 * Math.PI / N) - Math.PI / N);
+  const cham = p.nutChamfer ? Math.min(H * 0.18, ap * 0.12) : 0;
+  const rc = ap / Math.cos(Math.PI / N);           // corner radius
+  const chamR = th => Math.min(polyR(th), rc - cham * 1.6);
+  const outerAt = (rf) => Array.from({length:seg}, (_, j) => { const th = j / seg * Math.PI * 2, r = rf(th); return [r * Math.cos(th), r * Math.sin(th)]; });
+  const parts = [inner];
+  // outer walls: flat-shaded, with optional corner chamfer bands top and bottom
+  const levels = cham ? [[yTop, chamR], [yTop - cham, polyR], [yBot + cham, polyR], [yBot, chamR]] : [[yTop, polyR], [yBot, polyR]];
+  for (let L = 0; L < levels.length - 1; L++) {
+    const [ya, fa] = levels[L], [yb, fb] = levels[L + 1];
+    const pos = [];
+    for (let j = 0; j < seg; j++) {
+      const t0 = j / seg * Math.PI * 2, t1 = (j + 1) / seg * Math.PI * 2;
+      const A = [fa(t0) * Math.cos(t0), ya, fa(t0) * Math.sin(t0)], C = [fa(t1) * Math.cos(t1), ya, fa(t1) * Math.sin(t1)];
+      const B = [fb(t0) * Math.cos(t0), yb, fb(t0) * Math.sin(t0)], D = [fb(t1) * Math.cos(t1), yb, fb(t1) * Math.sin(t1)];
+      pos.push(...A, ...C, ...B, ...C, ...D, ...B);
+    }
+    const w = new THREE.BufferGeometry();
+    w.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); w.computeVertexNormals();
+    parts.push(w);
+  }
+  parts.push(annulus(ring(0), outerAt(cham ? chamR : polyR), yTop, true));
+  parts.push(annulus(ring(rows), outerAt(cham ? chamR : polyR), yBot, false));
+  return parts;
+}
+
+/* ================= geometry: heads ================= */
+function headSpec(p) {
+  const D = p.d * p.headScale, rs = p.d / 2;
+  const dome = (base, h, R, e = 0.6) => r => base + h * Math.pow(Math.max(0, 1 - (r / R) ** 2), e);
+  const chamfered = (H, R, c) => r => r < R - c ? H : H - (r - (R - c));
+  let R, side, top;
+  switch (p.head) {
+    case 'pan':    R = Math.max(D, rs * 1.15); side = [[rs,0],[R,0],[R,0.33*D]]; top = dome(0.33*D, 0.27*D, R); break;
+    case 'button': R = Math.max(0.95*D, rs * 1.15); side = [[rs,0],[R,0],[R,0.05*D]]; top = dome(0.05*D, 0.5*D, R, 0.55); break;
+    case 'truss':  R = Math.max(1.25*D, rs * 1.15); side = [[rs,0],[R,0],[R,0.04*D]]; top = dome(0.04*D, 0.38*D, R, 0.6); break;
+    case 'cheese': { R = Math.max(0.8*D, rs * 1.15); const H = 0.68*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); break; }
+    case 'socket': { R = Math.max(0.78*D, rs * 1.15); const H = 1.0*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); break; }
+    case 'flat':   { R = Math.max(D, rs * 1.15); const h = R - rs, t = 0.06*D; side = [[rs,0],[R,h],[R,h+t]]; top = () => h + t; break; }
+    case 'oval':   { R = Math.max(D, rs * 1.15); const h = R - rs, t = 0.06*D; side = [[rs,0],[R,h],[R,h+t]]; top = dome(h + t, 0.22*D, R); break; }
+  }
+  return {R, side, top};
+}
+function makeRecess(drive, q) {
+  const w = q / 90, m = s => ss(w, -w, s);
+  switch (drive) {
+    case 'slotted': { const D = 0.34*q; return (x, z) => D * m(sdBox(x, z, q * 1.3, 0.085*q)); }
+    case 'phillips': case 'pozidriv': {
+      const a = 0.42*q, hw = 0.075*q, D = 0.42*q, pozi = drive === 'pozidriv';
+      return (x, z) => {
+        let s = Math.min(sdBox(x, z, a, hw), sdBox(x, z, hw, a), Math.hypot(x, z) - hw * 1.9);
+        if (pozi) { const xr = (x + z) * 0.7071, zr = (x - z) * 0.7071;
+          s = Math.min(s, sdBox(xr, zr, a * 0.55, hw * 0.28), sdBox(xr, zr, hw * 0.28, a * 0.55)); }
+        return D * Math.max(0.12, 1 - Math.hypot(x, z) / (a * 1.05)) * m(s);
+      };
+    }
+    case 'hex':    { const ap = 0.42*q, D = 0.6*q; return (x, z) => (D - 0.15 * Math.hypot(x, z)) * m(sdHex(x, z, ap)); }
+    case 'torx':   { const a = 0.48*q, D = 0.55*q;
+      return (x, z) => { const k = Math.cos(6 * Math.atan2(z, x));
+        const r = a * (0.76 + 0.24 * Math.sign(k) * Math.pow(Math.abs(k), 0.6));
+        return D * m((Math.hypot(x, z) - r) * 0.8); }; }
+    case 'square': { const h = 0.28*q, D = 0.55*q; return (x, z) => D * (1 - 0.25 * Math.hypot(x, z) / h) * m(sdBox(x, z, h, h)); }
+    default: return () => 0;
+  }
+}
+function buildTop(R, top, recess, minY, na) {
+  const nr = 130;
+  const pos = new Float32Array((1 + (nr + 1) * na) * 3);
+  let k = 0;
+  const h = (x, z, r) => { const t = top(r); return t - Math.min(recess(x, z), Math.max(0, t - minY)); };
+  pos[k++] = 0; pos[k++] = h(0, 0, 0); pos[k++] = 0;
+  for (let i = 1; i <= nr + 1; i++) {
+    const r = R * Math.min(i, nr) / nr;
+    for (let j = 0; j < na; j++) {
+      const th = j / na * Math.PI * 2, x = r * Math.cos(th), z = r * Math.sin(th);
+      pos[k++] = x; pos[k++] = i > nr ? top(R) : h(x, z, r); pos[k++] = z;
+    }
+  }
+  const idx = [], V = (i, j) => 1 + (i - 1) * na + (j % na);
+  for (let j = 0; j < na; j++) idx.push(0, V(1, j + 1), V(1, j));
+  for (let i = 1; i <= nr; i++) for (let j = 0; j < na; j++) {
+    const a = V(i, j), c = V(i, j + 1), b = V(i + 1, j), d = V(i + 1, j + 1);
+    idx.push(a, c, b, c, d, b);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+function latheSegments(points, segs) {
+  const out = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], b = points[i + 1];
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6) continue;
+    out.push(new THREE.LatheGeometry([new THREE.Vector2(...a), new THREE.Vector2(...b)], segs));
+  }
+  return out;
+}
+function buildHead(p) {
+  if (p.head === 'none') return [];
+  const geoms = [], D = p.d * p.headScale, rs = p.d / 2;
+  const segs = Math.max(24, Math.round(p.segments) + 32);
+  let yOff = 0;
+  const flange = p.flange && p.head !== 'flat' && p.head !== 'oval';
+  const add = (g, y = 0) => { g.translate(0, y, 0); geoms.push(g); };
+  if (p.head === 'hex') {
+    const s = Math.max(1.6 * D, p.d * 1.2), H = 0.65 * D, rc = s / 2 / Math.cos(Math.PI / 6);
+    if (flange) { const ft = 0.1 * D, Rf = s * 0.62;
+      for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[rc*0.98,ft]], segs)) add(g); yOff = ft; }
+    let g = new THREE.CylinderGeometry(rc, rc, H, 6, 1).toNonIndexed(); g.computeVertexNormals();
+    add(g, yOff + H / 2);
+    for (const c of latheSegments([[rc*0.999, yOff + H],[s*0.46, yOff + H + 0.04*D],[0, yOff + H + 0.04*D]], segs)) add(c);
+    return geoms;
+  }
+  const spec = headSpec(p);
+  if (flange) { const ft = 0.09 * D, Rf = spec.R * 1.2;
+    for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[spec.R,ft]], segs)) add(g); yOff = ft; }
+  for (const g of latheSegments(spec.side, segs)) add(g, yOff);
+  add(buildTop(spec.R, spec.top, p.drive === 'none' ? () => 0 : makeRecess(p.drive, spec.R), 0.06 * p.d,
+    Math.max(128, Math.round(p.segments) * 4)), yOff);
+  return geoms;
+}
+
+/* ================= scene ================= */
+const main = document.querySelector('main');
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+main.prepend(renderer.domElement);
+document.getElementById('loading').remove();
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 5000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.autoRotateSpeed = 1.6;
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.0004;
+scene.add(key, key.target, new THREE.HemisphereLight(0xdfe8ff, 0x30281e, 0.35));
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({opacity:0.4}));
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+
+/* Infinite floor grid (after Superstudio's Supersurface): constant-width lines drawn in the
+   shader, fading out toward the horizon and wherever lines get denser than a pixel. */
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { uCell: {value: 10}, uFade: {value: 1000}, uColor: {value: new THREE.Color('#ffffff')}, uCenter: {value: new THREE.Vector3()} },
+  vertexShader: `varying vec3 vW;
+    void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `uniform float uCell; uniform float uFade; uniform vec3 uColor; uniform vec3 uCenter; varying vec3 vW;
+    void main(){
+      vec2 c = vW.xz / uCell;
+      vec2 fw = fwidth(c);
+      vec2 g = abs(fract(c - 0.5) - 0.5) / fw;
+      float line = 1.0 - min(min(g.x, g.y) / 1.1, 1.0);
+      float dens = 1.0 - smoothstep(0.06, 0.3, max(fw.x, fw.y));
+      float dist = 1.0 - smoothstep(uFade * 0.25, uFade, length(vW.xz - uCenter.xz));
+      float a = line * dens * dist * 0.75;
+      if (a < 0.004) discard;
+      gl_FragColor = vec4(uColor, a);
+    }`,
+}));
+grid.rotation.x = -Math.PI / 2; grid.renderOrder = -1;
+scene.add(grid);
+
+const material = new THREE.MeshPhysicalMaterial({side:THREE.DoubleSide, clearcoatRoughness:0.3});
+const assembly = new THREE.Group();
+scene.add(assembly);
+
+function applyMaterial() {
+  const f = FINISHES[state.finish];
+  material.color.set(f.color ?? state.color);
+  material.metalness = f.metal; material.roughness = state.rough;
+  material.clearcoat = state.finish === 'black' ? 0.35 : 0;
+  material.wireframe = state.wire;
+}
+
+let lastRadius = 0;
+function rebuild() {
+  assembly.traverse(o => o.geometry && o.geometry.dispose());
+  assembly.clear();
+  const T = threadModel(state);
+  const parts = [];
+  if (state.showScrew) parts.push(...buildShank(state, T), ...buildHead(state));
+  if (state.showNut) {
+    const H = state.nutHeight * state.d;
+    const yTop = state.showScrew ? -(state.nutPos / 100) * Math.max(0, state.length - H) : H / 2;
+    parts.push(...buildNut(state, T, yTop));
+  }
+  for (const g of parts) {
+    const mesh = new THREE.Mesh(g, material);
+    mesh.castShadow = mesh.receiveShadow = true;
+    assembly.add(mesh);
+  }
+  assembly.rotation.set(THREE.MathUtils.degToRad(state.rotX), THREE.MathUtils.degToRad(state.rotY), THREE.MathUtils.degToRad(state.rotZ));
+  assembly.updateMatrixWorld(true);
+  applyMaterial();
+
+  const box = new THREE.Box3().setFromObject(assembly);
+  const sph = box.getBoundingSphere(new THREE.Sphere()), r = sph.radius;
+  floor.position.y = box.min.y - 0.01; floor.scale.setScalar(r * 8);
+  // grid cell: a round number of millimetres, roughly a fifth of the object's size
+  let step = Math.pow(10, Math.floor(Math.log10(r)));
+  if (r / step < 2.5) step /= 2;
+  const bgCol = new THREE.Color(state.bg), light = bgCol.r * 0.3 + bgCol.g * 0.59 + bgCol.b * 0.11 > 0.5;
+  const gu = grid.material.uniforms;
+  gu.uCell.value = step; gu.uFade.value = r * 28; gu.uCenter.value.copy(sph.center);
+  gu.uColor.value.set(light ? '#333333' : '#ffffff');
+  grid.scale.setScalar(r * 200);
+  grid.position.set(sph.center.x, box.min.y - 0.02, sph.center.z);
+  grid.visible = state.grid;
+  main.style.color = light ? '#222' : '';
+  floor.material.opacity = light ? 0.25 : 0.4;
+  key.position.set(sph.center.x + r * 2, sph.center.y + r * 3, sph.center.z + r * 1.6);
+  key.target.position.copy(sph.center);
+  const sc = key.shadow.camera;
+  sc.left = sc.bottom = -r * 1.6; sc.right = sc.top = r * 1.6; sc.near = r * 0.3; sc.far = r * 9;
+  sc.updateProjectionMatrix();
+
+  scene.background = new THREE.Color(state.bg);
+  controls.autoRotate = state.autoRotate;
+  if (!lastRadius || Math.abs(r - lastRadius) / lastRadius > 0.3) fitView();
+  else controls.target.copy(sph.center);
+  updateLabel(T);
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+}
+
+function fitView() {
+  const sph = new THREE.Box3().setFromObject(assembly).getBoundingSphere(new THREE.Sphere());
+  lastRadius = sph.radius;
+  const dist = sph.radius / Math.sin(camera.fov * Math.PI / 360) * 1.08;
+  controls.target.copy(sph.center);
+  camera.position.copy(sph.center).addScaledVector(new THREE.Vector3(1.1, 0.5, 1.4).normalize(), dist);
+  camera.near = dist / 200; camera.far = dist * 120;
+  camera.updateProjectionMatrix(); controls.update();
+}
+
+function updateLabel(T) {
+  const s = state, size = (s.profile === 'metric' ? 'M' : 'Ø') + mm(s.d);
+  const thread = s.profile === 'none' ? 'unthreaded'
+    : `pitch ${T.P.toFixed(2)} mm${s.leftHand ? ' LH' : ''}`;
+  let kicker, big, detail;
+  if (s.showScrew) {
+    const turns = s.profile === 'none' ? 0 : s.length * s.threadLen / 100 / T.P;
+    const head = HEADS.find(h => h[0] === s.head)[1].replace(/ \(.*\)/, '');
+    const drive = s.head === 'hex' || s.head === 'none' || s.drive === 'none' ? '' : ', ' + DRIVES.find(d => d[0] === s.drive)[1];
+    kicker = (s.head === 'none' ? 'Threaded rod' : head + ' head') + drive + (s.showNut ? ' + nut' : '');
+    big = `${size}×${mm(s.length)}`;
+    detail = `${thread}${turns ? ` · ${turns.toFixed(1)} turns` : ''} · ${s.threadLen}% threaded · ${FINISHES[s.finish].name}. Dimensions in mm.`;
+  } else {
+    kicker = `${s.nutEdges}-sided nut`;
+    big = size;
+    detail = `${mm(s.nutWidth * s.d)} mm across flats · ${mm(s.nutHeight * s.d)} mm tall · ${thread} · ${FINISHES[s.finish].name}.`;
+  }
+  const el = document.getElementById('label');
+  el.replaceChildren();
+  for (const [cls, text, tag] of [['kicker', kicker, 'i'], ['big', big, 'b'], ['fine', detail, 'span']]) {
+    const n = document.createElement(tag); n.className = cls; n.textContent = text; el.appendChild(n);
+  }
+}
+
+let pending = false;
+function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; rebuild(); }); }
+function resize() {
+  const w = main.clientWidth, h = main.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h;
+  // on wide stages, nudge the object right so the big caption on the left has room
+  if (w > 700) camera.setViewOffset(w, h, -w * 0.12, 0, w, h); else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(main);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+renderer.setAnimationLoop(() => { controls.autoRotate = state.autoRotate && !reduceMotion.matches; controls.update(); renderer.render(scene, camera); });
+
+/* ================= export ================= */
+const statusEl = document.getElementById('status');
+const say = t => { statusEl.textContent = t; clearTimeout(say.t); say.t = setTimeout(() => statusEl.textContent = '', 3500); };
+let downloadsCap;  // undefined = not resolved yet, null = not available (local file)
+if (window.claude?.use) window.claude.use('downloads').then(d => downloadsCap = d).catch(() => downloadsCap = null);
+else downloadsCap = null;
+
+async function offerFile(filename, blob) {
+  if (downloadsCap) {
+    try { await downloadsCap.save({filename, data: blob}); say('Saved ' + filename); }
+    catch (e) { say(e?.code === 'declined' ? 'Save cancelled' : 'Could not save: ' + (e?.message || e?.code || 'unknown error')); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  say('Saved ' + filename);
+}
+
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipOne(name, data) {           // single stored (uncompressed) file
+  const nb = new TextEncoder().encode(name), crc = crc32(data), n = data.length;
+  const lh = new DataView(new ArrayBuffer(30)), cd = new DataView(new ArrayBuffer(46)), end = new DataView(new ArrayBuffer(22));
+  [[0,0x04034b50,4],[4,20,2],[6,0,2],[8,0,2],[10,0,2],[12,33,2],[14,crc,4],[18,n,4],[22,n,4],[26,nb.length,2],[28,0,2]]
+    .forEach(([o,v,s]) => s === 4 ? lh.setUint32(o, v, true) : lh.setUint16(o, v, true));
+  [[0,0x02014b50,4],[4,20,2],[6,20,2],[8,0,2],[10,0,2],[12,0,2],[14,33,2],[16,crc,4],[20,n,4],[24,n,4],[28,nb.length,2],
+   [30,0,2],[32,0,2],[34,0,2],[36,0,2],[38,0,4],[42,0,4]].forEach(([o,v,s]) => s === 4 ? cd.setUint32(o, v, true) : cd.setUint16(o, v, true));
+  const cdOff = 30 + nb.length + n, cdSize = 46 + nb.length;
+  [[0,0x06054b50,4],[4,0,2],[6,0,2],[8,1,2],[10,1,2],[12,cdSize,4],[16,cdOff,4],[20,0,2]]
+    .forEach(([o,v,s]) => s === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true));
+  return new Blob([lh, nb, data, cd, nb, end], {type:'application/zip'});
+}
+
+const fileBase = () => {
+  const s = state, size = (s.profile === 'metric' ? 'M' : 'D') + s.d;
+  return s.showScrew ? `screw-${size}x${s.length}-${s.head}${s.showNut ? '-with-nut' : ''}` : `nut-${size}-${s.nutEdges}sided`;
+};
+let exportFmt = 'png', transparent = false;
+const transBtn = document.getElementById('transparent');
+const syncExport = () => {
+  transBtn.textContent = mark(transparent) + 'Transparent background';
+  transBtn.setAttribute('aria-checked', String(transparent)); transBtn.setAttribute('role', 'switch');
+  transBtn.hidden = exportFmt !== 'png';
+  for (const b of document.querySelectorAll('.fmt button')) b.setAttribute('aria-pressed', String(b.dataset.fmt === exportFmt));
+};
+transBtn.onclick = () => { transparent = !transparent; syncExport(); };
+for (const b of document.querySelectorAll('.fmt button')) b.onclick = () => { exportFmt = b.dataset.fmt; syncExport(); };
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+document.querySelector('#export kbd').textContent = isMac ? 'cmd + S' : 'ctrl + S';
+document.getElementById('export').onclick = () => exportFmt === 'png' ? savePNG() : saveSTL();
+addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); exportFmt === 'png' ? savePNG() : saveSTL(); }
+});
+syncExport();
+
+function savePNG() {
+  const bg = scene.background, gv = grid.visible;
+  if (transparent) { scene.background = null; grid.visible = false; }
+  renderer.render(scene, camera);
+  renderer.domElement.toBlob(b => { scene.background = bg; grid.visible = gv; offerFile(fileBase() + '.png', b); }, 'image/png');
+}
+function saveSTL() {
+  const stl = new Uint8Array(new STLExporter().parse(assembly, {binary:true}).buffer);
+  const name = fileBase() + '.stl';
+  // Hosted pages can only hand out a fixed set of file types, so the STL ships inside a .zip there.
+  if (downloadsCap) offerFile(fileBase() + '.stl.zip', zipOne(name, stl));
+  else offerFile(name, new Blob([stl], {type:'model/stl'}));
+}
+document.getElementById('fit').onclick = fitView;
+document.getElementById('reset').onclick = () => {
+  Object.assign(state, DEFAULTS); activePreset = ''; syncUI(); rebuild(); fitView();
+};
+document.getElementById('random').onclick = () => {
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  Object.assign(state, {
+    head: pick(HEADS.slice(0, 8))[0], drive: pick(DRIVES.slice(0, 6))[0], d: pick([3, 4, 5, 6, 8, 10, 12]),
+    profile: pick(['metric', 'metric', 'wood']), threadLen: pick([100, 100, 70, 60]), autoPitch: true,
+    threadScale: 1, runout: 0, finish: pick(Object.keys(FINISHES).filter(k => k !== 'custom')),
+    flange: Math.random() < 0.2, showScrew: true, showNut: Math.random() < 0.3, rotX: 0, rotY: 0, rotZ: 0,
+  });
+  state.length = Math.round(state.d * (2 + Math.random() * 7));
+  state.tip = state.profile === 'wood' ? 'point' : 'chamfer';
+  if (state.profile === 'wood') state.showNut = false;
+  state.rough = FINISHES[state.finish].rough;
+  activePreset = ''; syncUI(); rebuild(); fitView();
+};
+
+syncUI(); resize(); rebuild(); fitView();
+</script>
+</html>
