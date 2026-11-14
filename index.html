@@ -980,12 +980,7 @@ function ditherFrame() {
   bmCtx.drawImage(renderer.domElement, 0, 0, w, h);
   const img = bmCtx.getImageData(0, 0, w, h), d = img.data;
   const g = new Float32Array(w * h);
-  // contrast around mid-grey before thresholding (-100 flattens to grey, +100 is near hard black/white)
-  const c = state.bmContrast * 2.55, cf = (259 * (c + 255)) / (255 * (259 - c));
-  for (let i = 0; i < w * h; i++) {
-    const v = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
-    g[i] = Math.min(255, Math.max(0, (v - 128) * cf + 128));
-  }
+  for (let i = 0; i < w * h; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
   const K = KERNELS[state.bmMethod] || KERNELS.jjn;
   const factor = {jjn: state.bmJJN, stucki: state.bmStucki, atkinson: state.bmAtkinson}[state.bmMethod] ?? K.max;
   const amt = factor / K.max, thr = state.bmThreshold / 100 * 255;
@@ -1046,7 +1041,14 @@ function applyMaterial() {
   if (featureLines) featureLines.visible = !render;
   if (renderer.shadowMap.enabled !== render) { renderer.shadowMap.enabled = render; renderMat.needsUpdate = true; floor.material.needsUpdate = true; }
   key.castShadow = render; floor.visible = render;
-  key.intensity = render ? 1.5 : Math.PI * 0.95;
+  // Bitmap contrast acts on the rendered scene, not on the dots: it sets how dramatic the lighting is.
+  // + : less soft fill from the environment, stronger key light, glossier steel, deeper floor shadow
+  // - : more even fill, softer key, flatter steel
+  const bc = state.style === 'bitmap' ? state.bmContrast / 100 : 0;
+  renderMat.envMapIntensity = Math.min(1.8, Math.max(0.12, 1.0 - 0.8 * bc));
+  renderMat.roughness = Math.min(0.5, Math.max(0.12, 0.3 - 0.15 * bc));
+  key.intensity = render ? 1.5 * Math.max(0.3, 1 + 1.4 * bc) : Math.PI * 0.95;
+  floor.material.opacity = Math.min(0.9, Math.max(0.15, 0.45 * (1 + 0.7 * bc)));
 }
 
 function buildParts(p, T) {
@@ -1098,7 +1100,6 @@ function rebuild() {
   // only real overlaps (nut on bolt, head over shank) count, never the walls of a recess or engraving
   edgeMat.uniforms.uGap.value = Math.max(r * 0.15, state.d * 0.5, state.drive === "custom" ? state.engDepth * 1.6 : 0);
   main.style.color = light ? '#222' : '';
-  floor.material.opacity = 0.45;
   key.position.set(sph.center.x + r * 0.6, sph.center.y + r * 4, sph.center.z + r * 1.2);   // mostly overhead: shadow sits under the part
   key.target.position.copy(sph.center);
   const sc = key.shadow.camera;
