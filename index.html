@@ -199,7 +199,7 @@ const mm = v => (+v).toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '');
 const SCHEMA = [
   {section:'Visualization'},
   {key:'style', label:'Style', type:'select', options:[['outline','Outline'],['render','Rendering'],['bitmap','Bitmap']]},
-  {key:'kind', label:'Type', type:'select', options:[['screw','Screw'],['nut','Nut'],['both','Screw + nut']]},
+  {key:'kind', label:'Type', type:'select', options:[['screw','Screw'],['both','Screw and nut']]},
   {section:'Bitmap', group:'bitmap'},
   {key:'bmThreshold', label:'Threshold', type:'range', min:0, max:100, step:1, unit:'', quick:true},
   {key:'bmContrast', label:'Contrast', type:'range', min:-100, max:100, step:1, unit:'', quick:true},
@@ -352,7 +352,7 @@ for (const s of SCHEMA) {
     el.addEventListener('input', () => {
       state[s.key] = s.type !== 'range' ? el.value : s.log ? s.fromSlider(+el.value) : parseFloat(el.value);
       if (s.live) { applyOrbit(); if (num) num.value = state[s.key]; return; }
-      if (s.key === 'kind') { state.showScrew = state.kind !== 'nut'; state.showNut = state.kind !== 'screw'; }
+      if (s.key === 'kind') { state.showScrew = true; state.showNut = state.kind === 'both'; }
       if (s.quick) { touched(); syncUI(); quickUpdate(); return; }   // look-only settings: no geometry rebuild
       if (s.key === 'pitch') state.autoPitch = false;
       if (s.key === 'profile' && state.profile === 'wood' && state.tip === 'chamfer') state.tip = 'point';
@@ -377,7 +377,8 @@ function resetSection(keys) {
   if (keys.includes('camAz')) { fitView(); applyOrbit(); }                // camera back to its start view
 }
 function syncUI() {
-  state.kind = state.showScrew && state.showNut ? 'both' : state.showNut ? 'nut' : 'screw';
+  state.showScrew = true;   // there is always a screw; the nut is the optional extra
+  state.kind = state.showNut ? 'both' : 'screw';
   for (const k in inputs) {
     const {el, s, num} = inputs[k];
     if (s.type === 'check') { el.textContent = mark(state[k]) + s.label; el.setAttribute('aria-checked', String(!!state[k])); }
