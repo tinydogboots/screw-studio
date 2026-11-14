@@ -13,7 +13,7 @@
   :root{
     color-scheme: light;
     --paper:#f9f8f5; --ink:#333333; --ink-strong:#101010; --well:#efeee9; --muted:#8b887f; --rule:rgba(51,51,51,.85);
-    --stage:#2b2b2a; --stage-ink:#f4f3ef; --stage-muted:rgba(244,243,239,.6);
+    --stage:#f2f2f2; --stage-ink:#111111; --stage-muted:rgba(17,17,17,.58);
     --mono:"JetBrains Mono", SFMono-Regular, Consolas, Menlo, monospace;
     --grot:"Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
   }
@@ -54,6 +54,9 @@
   input[type=color]::-moz-color-swatch{border:0}
   .check{display:block;width:100%;padding:0}
   .check:hover{color:var(--ink-strong)}
+  .filebtn{max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px var(--mono);text-transform:none;
+    border:1px dotted var(--ink);border-radius:999px;padding:4px 10px 3px}
+  .filebtn:hover{background:var(--ink);color:var(--paper);border-style:solid}
 
   input[type=range]{-webkit-appearance:none;appearance:none;display:block;width:100%;height:22px;margin:2px 0 0;background:transparent;cursor:pointer}
   input[type=range]::-webkit-slider-runnable-track{height:1px;background:rgba(51,51,51,.45)}
@@ -146,12 +149,15 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/+esm';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js/+esm';
 import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/environments/RoomEnvironment.js/+esm';
 import { STLExporter } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/STLExporter.js/+esm';
+import { LineSegments2 } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/lines/LineSegments2.js/+esm';
+import { LineSegmentsGeometry } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/lines/LineSegmentsGeometry.js/+esm';
+import { LineMaterial } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/lines/LineMaterial.js/+esm';
 
 /* ================= configuration ================= */
 const HEADS = [['pan','Pan'],['button','Button'],['truss','Truss'],['cheese','Cheese'],['socket','Socket cap'],
   ['flat','Flat / countersunk'],['oval','Raised countersunk'],['hex','Hex'],['none','None (threaded rod)']];
 const DRIVES = [['phillips','Phillips'],['pozidriv','Pozidriv'],['slotted','Slotted'],['hex','Hex socket'],
-  ['torx','Torx / star'],['square','Square (Robertson)'],['none','None']];
+  ['torx','Torx / star'],['square','Square (Robertson)'],['custom','Custom image'],['none','None']];
 const FINISHES = {
   steel:{name:'Bright steel',color:'#b9bdc3',metal:1,rough:0.30},
   stainless:{name:'Stainless',color:'#d8dbe0',metal:1,rough:0.18},
@@ -168,15 +174,16 @@ const FINISHES = {
 const DEFAULTS = {
   showScrew:true, showNut:false,
   head:'pan', headScale:1, drive:'phillips', flange:false,
+  engScale:70, engDepth:0.6, engRot:0, engInvert:false,
   d:6, length:30, threadLen:100, tip:'chamfer', pointLen:1.3,
   profile:'metric', autoPitch:true, pitch:1, threadScale:1, leftHand:false,
   runout:0, endScale:0.3,
   nutEdges:6, nutWidth:1.6, nutHeight:0.8, nutPos:70, clearance:0.05, nutChamfer:true,
   segments:96,
-  projection:'perspective', focal:35,
+  projection:'perspective', focal:35, camAz:38, camEl:15, camRoll:0,
   rotX:0, rotY:0, rotZ:0,
   finish:'zinc', color:'#8fb4ff', rough:0.26,
-  autoRotate:false, grid:true, wire:false, bg:'#2b2b2a',
+  autoRotate:false, grid:false, wire:false, bg:'#f2f2f2',   // stage: 5% black, no grid for now
 };
 const PRESETS = {
   'Machine screw M4×16 · pan Phillips': {head:'pan',drive:'phillips',d:4,length:16,finish:'zinc'},
@@ -200,6 +207,11 @@ const SCHEMA = [
   {key:'head', label:'Style', type:'select', options:HEADS},
   {key:'headScale', label:'Head size', type:'range', min:0.6, max:1.6, step:0.05, unit:'×'},
   {key:'drive', label:'Drive', type:'select', options:DRIVES},
+  {key:'engImg', label:'Image', type:'file'},
+  {key:'engScale', label:'Image size', type:'range', min:10, max:100, step:1, unit:'%'},
+  {key:'engDepth', label:'Engrave depth', type:'range', min:0.05, max:5, step:0.05, unit:'mm'},
+  {key:'engRot', label:'Image rotation', type:'range', min:-180, max:180, step:1, unit:'°'},
+  {key:'engInvert', label:'Invert image', type:'check'},
   {key:'flange', label:'Flange / washer', type:'check'},
   {section:'Shank', group:'screw'},
   {key:'d', label:'Diameter', type:'range', min:1, max:40, step:0.5, unit:'mm'},
@@ -223,21 +235,17 @@ const SCHEMA = [
   {key:'nutPos', label:'Position', type:'range', min:0, max:100, step:1, unit:'%'},
   {key:'clearance', label:'Clearance', type:'range', min:0, max:1, step:0.01, unit:'mm'},
   {key:'nutChamfer', label:'Chamfered', type:'check'},
-  {section:'Finish'},
-  {key:'finish', label:'Material', type:'select', options:Object.entries(FINISHES).map(([k,v])=>[k,v.name])},
-  {key:'color', label:'Colour', type:'color'},
-  {key:'rough', label:'Roughness', type:'range', min:0.05, max:0.9, step:0.01, unit:''},
   {section:'Camera'},
   {key:'projection', label:'View', type:'select', options:[['perspective','Perspective'],['isometric','Isometric']]},
   {key:'focal', label:'Focal length', type:'range', min:4, max:400, step:1, unit:'mm', log:true},
+  {key:'camAz', label:'Orbit', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
+  {key:'camEl', label:'Elevation', type:'range', min:-89, max:89, step:1, unit:'°', live:true},
+  {key:'camRoll', label:'Roll', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
   {section:'Placement & view'},
   {key:'rotX', label:'Rotate X', type:'range', min:-180, max:180, step:1, unit:'°'},
   {key:'rotY', label:'Rotate Y', type:'range', min:-180, max:180, step:1, unit:'°'},
   {key:'rotZ', label:'Rotate Z', type:'range', min:-180, max:180, step:1, unit:'°'},
   {key:'autoRotate', label:'Turntable', type:'check'},
-  {key:'grid', label:'Floor grid', type:'check'},
-  {key:'wire', label:'Wireframe', type:'check'},
-  {key:'bg', label:'Background', type:'color'},
 ];
 
 /* ================= state ================= */
@@ -245,7 +253,7 @@ const STORE_KEY = 'screw-studio-v4';
 const state = {...DEFAULTS};
 try { const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
   // turntable always starts off; it only spins when switched on in this visit
-  if (saved) for (const k in DEFAULTS) if (k !== 'autoRotate' && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
+  if (saved) for (const k in DEFAULTS) if (!['autoRotate', 'grid', 'bg'].includes(k) && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
 if (!state.showScrew && !state.showNut) state.showScrew = true;
 
 /* ================= UI ================= */
@@ -282,6 +290,22 @@ for (const s of SCHEMA) {
       touched(); syncUI(); schedule();
     };
     row.appendChild(el);
+  } else if (s.type === 'file') {
+    // image upload for the custom engraving
+    const line = document.createElement('div'); line.className = 'line';
+    const lab = document.createElement('label'); lab.htmlFor = id; lab.textContent = s.label;
+    el = document.createElement('input'); el.type = 'file'; el.id = id; el.accept = 'image/png,image/jpeg,image/svg+xml,image/webp,image/gif'; el.hidden = true;
+    const pick = document.createElement('button'); pick.type = 'button'; pick.className = 'filebtn'; pick.textContent = 'Choose file';
+    pick.onclick = () => el.click();
+    el.addEventListener('change', () => {
+      const f = el.files && el.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => loadEngraving(rd.result, f.name, () => { state.drive = 'custom'; touched(); syncUI(); schedule(); });
+      rd.readAsDataURL(f);
+      el.value = '';
+    });
+    line.append(lab, pick, el); row.appendChild(line);
+    s.pick = pick;
   } else {
     const line = document.createElement('div'); line.className = 'line';
     const lab = document.createElement('label'); lab.htmlFor = id; lab.textContent = s.label; line.appendChild(lab);
@@ -308,6 +332,7 @@ for (const s of SCHEMA) {
       num.addEventListener('change', () => {
         let v = parseFloat(num.value); if (isNaN(v)) { syncUI(); return; }
         state[s.key] = Math.min(s.max, Math.max(s.min, v));
+        if (s.live) { applyOrbit(); syncUI(); return; }   // camera angles: move the camera, no rebuild
         if (s.key === 'pitch') state.autoPitch = false;
         touched(); syncUI(); schedule();
       });
@@ -318,8 +343,8 @@ for (const s of SCHEMA) {
     el.id = id;
     el.addEventListener('input', () => {
       state[s.key] = s.type !== 'range' ? el.value : s.log ? s.fromSlider(+el.value) : parseFloat(el.value);
+      if (s.live) { applyOrbit(); if (num) num.value = state[s.key]; return; }
       if (s.key === 'pitch') state.autoPitch = false;
-      if (s.key === 'finish' && FINISHES[state.finish].rough != null) state.rough = FINISHES[state.finish].rough;
       if (s.key === 'profile' && state.profile === 'wood' && state.tip === 'chamfer') state.tip = 'point';
       touched(); syncUI(); schedule();
     });
@@ -354,7 +379,7 @@ function syncUI() {
   for (const k in inputs) {
     const {el, s, num} = inputs[k];
     if (s.type === 'check') { el.textContent = mark(state[k]) + s.label; el.setAttribute('aria-checked', String(!!state[k])); }
-    else el.value = s.log ? s.toSlider(state[k]) : state[k];
+    else if (s.type !== 'file') el.value = s.log ? s.toSlider(state[k]) : state[k];
     if (num && document.activeElement !== num) num.value = +(+state[k]).toFixed(3);
   }
   presetSel.value = activePreset;
@@ -365,11 +390,13 @@ function syncUI() {
   off('autoPitch', noThread); off('pitch', noThread); off('threadScale', noThread);
   off('runout', noThread); off('endScale', noThread || state.runout === 0); off('leftHand', noThread);
   off('drive', state.head === 'hex' || state.head === 'none');
+  const engOn = state.drive === 'custom' && state.head !== 'hex' && state.head !== 'none';
+  for (const k of ['engImg', 'engScale', 'engDepth', 'engRot', 'engInvert']) inputs[k].row.hidden = !engOn;
+  inputs.engImg.s.pick.textContent = ENG.name ? ENG.name : 'Choose file';
   off('headScale', state.head === 'none');
   off('flange', ['flat','oval','none'].includes(state.head));
   off('pointLen', state.tip !== 'point');
   off('nutPos', !state.showScrew);
-  off('color', state.finish !== 'custom');
   off('focal', state.projection === 'isometric');
   for (const g of groups.screw) g.hidden = !state.showScrew;
   for (const g of groups.nut) g.hidden = !state.showNut;
@@ -474,6 +501,36 @@ function annulus(inner, outer, y, up) { // inner/outer: arrays of [x,z] at match
   return g;
 }
 
+/* ================= drawn feature lines =================
+   Builders add clean polylines here (thread crest helix, rims between surfaces, recess outline).
+   They are drawn as real 3D lines in the view and reused for the SVG export. */
+let LINES = [];
+const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const circle = (r, y, n = 160) => Array.from({length: n + 1}, (_, i) => { const t = i / n * Math.PI * 2; return V3(r * Math.cos(t), y, r * Math.sin(t)); });
+function edgesOf(geo, angle = 25) {          // crisp edges of a flat-faceted part (hex prisms, nut walls)
+  const e = new THREE.EdgesGeometry(geo, angle), a = e.attributes.position;
+  for (let i = 0; i < a.count; i += 2) LINES.push([V3(a.getX(i), a.getY(i), a.getZ(i)), V3(a.getX(i + 1), a.getY(i + 1), a.getZ(i + 1))]);
+  e.dispose();
+}
+// outline of a recess (or engraving) on a head top: marching squares at the rim of the cut
+function recessOutline(recess, top, R, yOff, thr = R * 0.01) {
+  const N = 220, h = 2 * R / N;
+  const f = (x, z) => (Math.hypot(x, z) < R * 0.995 ? recess(x, z) : 0) - thr;
+  const val = []; for (let j = 0; j <= N; j++) { const row = []; for (let i = 0; i <= N; i++) row.push(f(-R + i * h, -R + j * h)); val.push(row); }
+  const lift = (x, z) => V3(x, top(Math.hypot(x, z)) + yOff + R * 0.003, z);
+  const cross = (x0, z0, v0, x1, z1, v1) => { const t = v0 / (v0 - v1); return [x0 + (x1 - x0) * t, z0 + (z1 - z0) * t]; };
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const x0 = -R + i * h, z0 = -R + j * h, x1 = x0 + h, z1 = z0 + h;
+    const a = val[j][i], b = val[j][i + 1], c = val[j + 1][i + 1], d = val[j + 1][i];
+    const pts = [];
+    if ((a > 0) !== (b > 0)) pts.push(cross(x0, z0, a, x1, z0, b));
+    if ((b > 0) !== (c > 0)) pts.push(cross(x1, z0, b, x1, z1, c));
+    if ((c > 0) !== (d > 0)) pts.push(cross(x1, z1, c, x0, z1, d));
+    if ((d > 0) !== (a > 0)) pts.push(cross(x0, z1, d, x0, z0, a));
+    for (let k = 0; k + 1 < pts.length; k += 2) LINES.push([lift(...pts[k]), lift(...pts[k + 1])]);
+  }
+}
+
 /* ================= geometry: screw shank ================= */
 function buildShank(p, T) {
   const {P, R, depth, rMin} = T, L = p.length;
@@ -494,20 +551,40 @@ function buildShank(p, T) {
     if (runLen > 0) a *= p.endScale + (1 - p.endScale) * ss(-L, -L + runLen, y);
     return a;
   };
-  const g = gridGeometry(rows, seg, (i, j) => {
-    const y = -L * i / rows, th = j / seg * Math.PI * 2;
-    let r = T.radius(j / seg, y, amp(y));
+  const rAt = (t, y) => {
+    let r = T.radius(t, y, amp(y));
     if (pointLen) { const s = sat((y + L) / pointLen);
       if (s < 1) r = rMin * Math.pow(s, 0.85) + (r - rMin) * Math.min(1, s * 1.6); }
     if (ch) r = Math.min(r, rMin * 0.92 + (R - rMin * 0.92) * sat((y + L) / ch));
     if (topCh) r = Math.min(r, rMin * 0.92 + (R - rMin * 0.92) * sat(-y / topCh));
+    return r;
+  };
+  const g = gridGeometry(rows, seg, (i, j) => {
+    const y = -L * i / rows, th = j / seg * Math.PI * 2, r = rAt(j / seg, y);
     return [r * Math.cos(th), y, r * Math.sin(th)];
   });
   const parts = [g];
   const pos = g.attributes.position.array;
   const ringAt = i => Array.from({length:seg}, (_, j) => [pos[(i * seg + j) * 3], pos[(i * seg + j) * 3 + 2]]);
-  if (!pointLen) parts.push(ringCap(ringAt(rows), -L, false));
-  if (p.head === 'none') parts.push(ringCap(ringAt(0), 0, true));
+  const ringLine = (i, y) => { const rg = ringAt(i); LINES.push([...rg, rg[0]].map(([x, z]) => V3(x, y, z))); };
+  if (!pointLen) { parts.push(ringCap(ringAt(rows), -L, false)); ringLine(rows, -L); }
+  if (p.head === 'none') { parts.push(ringCap(ringAt(0), 0, true)); ringLine(0, 0); }
+
+  // one clean line per turn: the thread crest as a helix, only where the thread is formed
+  if (depth > 0) {
+    const hand = p.leftHand ? -1 : 1, uc = p.profile === 'wood' ? 0.32 : 0.5;
+    const perTurn = 96;
+    let run = null;
+    for (let k = 0; ; k++) {
+      const s = k / perTurn, y = (uc - 1) * P - P * s;
+      if (y < -L) break;
+      const t = fract(hand * s), th = hand * s * Math.PI * 2;
+      if (amp(y) > 0.35) {
+        const r = rAt(t, y) * 1.002;
+        (run || (run = [], LINES.push(run), run)).push(V3(r * Math.cos(th), y, r * Math.sin(th)));
+      } else run = null;
+    }
+  }
   return parts;
 }
 
@@ -545,9 +622,11 @@ function buildNut(p, T, yTop) {
     const w = new THREE.BufferGeometry();
     w.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); w.computeVertexNormals();
     parts.push(w);
+    edgesOf(w, 20);   // corners, top/bottom outline and chamfer bands of the nut
   }
   parts.push(annulus(ring(0), outerAt(cham ? chamR : polyR), yTop, true));
   parts.push(annulus(ring(rows), outerAt(cham ? chamR : polyR), yBot, false));
+  for (const [i, y] of [[0, yTop], [rows, yBot]]) { const rg = ring(i); LINES.push([...rg, rg[0]].map(([x, z]) => V3(x, y, z))); }   // bore
   return parts;
 }
 
@@ -561,12 +640,12 @@ function headSpec(p) {
     case 'pan':    R = Math.max(D, rs * 1.15); side = [[rs,0],[R,0],[R,0.33*D]]; top = dome(0.33*D, 0.27*D, R); break;
     case 'button': R = Math.max(0.95*D, rs * 1.15); side = [[rs,0],[R,0],[R,0.05*D]]; top = dome(0.05*D, 0.5*D, R, 0.55); break;
     case 'truss':  R = Math.max(1.25*D, rs * 1.15); side = [[rs,0],[R,0],[R,0.04*D]]; top = dome(0.04*D, 0.38*D, R, 0.6); break;
-    case 'cheese': { R = Math.max(0.8*D, rs * 1.15); const H = 0.68*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); break; }
-    case 'socket': { R = Math.max(0.78*D, rs * 1.15); const H = 1.0*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); break; }
+    case 'cheese': { R = Math.max(0.8*D, rs * 1.15); const H = 0.68*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); var edgeR = R - c; break; }
+    case 'socket': { R = Math.max(0.78*D, rs * 1.15); const H = 1.0*D, c = 0.06*D; side = [[rs,0],[R,0],[R,H-c]]; top = chamfered(H, R, c); var edgeR = R - c; break; }
     case 'flat':   { R = Math.max(D, rs * 1.15); const h = R - rs, t = 0.06*D; side = [[rs,0],[R,h],[R,h+t]]; top = () => h + t; break; }
     case 'oval':   { R = Math.max(D, rs * 1.15); const h = R - rs, t = 0.06*D; side = [[rs,0],[R,h],[R,h+t]]; top = dome(h + t, 0.22*D, R); break; }
   }
-  return {R, side, top};
+  return {R, side, top, edgeR};
 }
 function makeRecess(drive, q) {
   const w = q / 90, m = s => ss(w, -w, s);
@@ -590,8 +669,53 @@ function makeRecess(drive, q) {
     default: return () => 0;
   }
 }
-function buildTop(R, top, recess, minY, na) {
-  const nr = 130;
+/* Custom engraving: an uploaded image becomes the recess on the head top.
+   Transparent images cut where they are opaque; opaque images cut where they are dark. */
+const ENG = {mask: null, N: 256, name: ''};
+const ENG_KEY = 'screw-studio-engraving';
+function engravingRecess(p, R) {
+  if (p.drive !== 'custom') return null;
+  if (!ENG.mask) return () => 0;
+  const N = ENG.N, m = ENG.mask, S = R * p.engScale / 100, D = p.engDepth;
+  const a = THREE.MathUtils.degToRad(-p.engRot), ca = Math.cos(a), sa = Math.sin(a);
+  const at = (i, j) => m[Math.min(N - 1, Math.max(0, j)) * N + Math.min(N - 1, Math.max(0, i))];
+  return (x, z) => {
+    const xr = x * ca - z * sa, zr = x * sa + z * ca;
+    const u = (xr / S + 1) / 2 * (N - 1), v = (zr / S + 1) / 2 * (N - 1);
+    if (u < 0 || v < 0 || u > N - 1 || v > N - 1) return 0;
+    const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;   // bilinear: smooth walls
+    let k = at(i, j) * (1 - fu) * (1 - fv) + at(i + 1, j) * fu * (1 - fv) + at(i, j + 1) * (1 - fu) * fv + at(i + 1, j + 1) * fu * fv;
+    if (p.engInvert) k = 1 - k;
+    return D * ss(0.35, 0.65, k);
+  };
+}
+function loadEngraving(src, name, done) {
+  const img = new Image();
+  img.onload = () => {
+    const N = ENG.N, c = document.createElement('canvas'); c.width = c.height = N;
+    const x = c.getContext('2d');
+    const iw = img.naturalWidth || 512, ih = img.naturalHeight || 512, s = Math.min(N / iw, N / ih) * 0.98;
+    const ox = (N - iw * s) / 2, oy = (N - ih * s) / 2;
+    x.drawImage(img, ox, oy, iw * s, ih * s);
+    const d = x.getImageData(0, 0, N, N).data;
+    // does the image itself have transparency? (look only inside the drawn area, not the margin)
+    let transparent = false;
+    for (let py = Math.ceil(oy) + 1; py < Math.floor(oy + ih * s) - 1 && !transparent; py++)
+      for (let px = Math.ceil(ox) + 1; px < Math.floor(ox + iw * s) - 1; px++) if (d[(py * N + px) * 4 + 3] < 250) { transparent = true; break; }
+    const m = new Float32Array(N * N);
+    for (let i = 0; i < N * N; i++) {
+      const lum = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255, al = d[i * 4 + 3] / 255;
+      m[i] = transparent ? al : (1 - lum) * al;   // transparent art: cut the opaque shapes; flat art: cut the dark marks
+    }
+    ENG.mask = m; ENG.name = name;
+    try { localStorage.setItem(ENG_KEY, JSON.stringify({name, src: c.toDataURL('image/png')})); } catch {}
+    done && done();
+  };
+  img.onerror = () => { say('That file could not be read as an image. Try a PNG, JPG or SVG.'); };
+  img.src = src;
+}
+
+function buildTop(R, top, recess, minY, na, nr = 130) {
   const pos = new Float32Array((1 + (nr + 1) * na) * 3);
   let k = 0;
   const h = (x, z, r) => { const t = top(r); return t - Math.min(recess(x, z), Math.max(0, t - minY)); };
@@ -629,21 +753,30 @@ function buildHead(p) {
   let yOff = 0;
   const flange = p.flange && p.head !== 'flat' && p.head !== 'oval';
   const add = (g, y = 0) => { g.translate(0, y, 0); geoms.push(g); };
+  const rims = (pts, y0 = 0) => { for (const [r, y] of pts) if (r > rs * 1.001) LINES.push(circle(r, y + y0)); };
   if (p.head === 'hex') {
     const s = Math.max(1.6 * D, p.d * 1.2), H = 0.65 * D, rc = s / 2 / Math.cos(Math.PI / 6);
     if (flange) { const ft = 0.1 * D, Rf = s * 0.62;
-      for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[rc*0.98,ft]], segs)) add(g); yOff = ft; }
+      for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[rc*0.98,ft]], segs)) add(g); yOff = ft;
+      rims([[Rf, 0], [Rf, ft]]); }
     let g = new THREE.CylinderGeometry(rc, rc, H, 6, 1).toNonIndexed(); g.computeVertexNormals();
     add(g, yOff + H / 2);
+    edgesOf(g, 20);
     for (const c of latheSegments([[rc*0.999, yOff + H],[s*0.46, yOff + H + 0.04*D],[0, yOff + H + 0.04*D]], segs)) add(c);
+    rims([[s * 0.46, yOff + H + 0.04 * D]]);
     return geoms;
   }
   const spec = headSpec(p);
   if (flange) { const ft = 0.09 * D, Rf = spec.R * 1.2;
-    for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[spec.R,ft]], segs)) add(g); yOff = ft; }
+    for (const g of latheSegments([[rs,0],[Rf,0],[Rf,ft],[spec.R,ft]], segs)) add(g); yOff = ft;
+    rims([[Rf, 0], [Rf, ft]]); }
   for (const g of latheSegments(spec.side, segs)) add(g, yOff);
-  add(buildTop(spec.R, spec.top, p.drive === 'none' ? () => 0 : makeRecess(p.drive, spec.R), 0.06 * p.d,
-    Math.max(128, Math.round(p.segments) * 4)), yOff);
+  rims(spec.side, yOff);                                     // a line wherever one surface turns into the next
+  if (spec.edgeR) LINES.push(circle(spec.edgeR, spec.top(spec.edgeR) + yOff));   // inner edge of a chamfered top
+  const eng = engravingRecess(p, spec.R);
+  const recess = eng || (p.drive === 'none' || p.drive === 'custom' ? () => 0 : makeRecess(p.drive, spec.R));
+  add(buildTop(spec.R, spec.top, recess, 0.06 * p.d, Math.max(128, Math.round(p.segments) * 4), eng ? 220 : 130), yOff);
+  recessOutline(recess, spec.top, spec.R, yOff, eng ? Math.min(spec.R * 0.01, p.engDepth * 0.4) : spec.R * 0.01);
   return geoms;
 }
 
@@ -709,19 +842,78 @@ const grid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMater
 grid.rotation.x = -Math.PI / 2; grid.renderOrder = -1;
 scene.add(grid);
 
-const material = new THREE.MeshPhysicalMaterial({side:THREE.DoubleSide, clearcoatRoughness:0.3});
+/* Technical-illustration look: white fill, black lines.
+   - outline: drawn in screen space from a depth pass (object next to background, or a part
+     overlapping another), so it follows the thread profile and every view automatically
+   - detail:  deliberate 3D lines from the builders (one helix per thread turn, a line where
+     surfaces meet on the head, the recess outline, hex/nut edges), hidden where the body covers them */
+const LINE_PX = 1.6;
+const material = new THREE.MeshBasicMaterial({side: THREE.DoubleSide, toneMapped: false, color: 0xffffff,
+  polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1});   // lets lines on the surface win the depth test
+const lineMat = new LineMaterial({color: 0x000000, linewidth: LINE_PX, worldUnits: false, toneMapped: false});
 const assembly = new THREE.Group();
 scene.add(assembly);
+let featureLines = null;
+
+const nrmRT = new THREE.WebGLRenderTarget(1, 1, {type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter});
+const nrmMat = new THREE.ShaderMaterial({side: THREE.DoubleSide,
+  vertexShader: `varying vec3 vP; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vP = mv.xyz; gl_Position = projectionMatrix * mv; }`,
+  // facet normal from screen derivatives: crisp creases even where mesh normals are smoothed
+  fragmentShader: `varying vec3 vP; void main(){ vec3 n = normalize(cross(dFdx(vP), dFdy(vP))); gl_FragColor = vec4(n, -vP.z); }`});
+const edgeMat = new THREE.ShaderMaterial({transparent: true, depthTest: false, depthWrite: false,
+  uniforms: {tN: {value: nrmRT.texture}, uTexel: {value: new THREE.Vector2(1, 1)}, uColor: {value: new THREE.Color(1, 1, 1)}, uGap: {value: 1}},
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `uniform sampler2D tN; uniform vec2 uTexel; uniform vec3 uColor; uniform float uGap; uniform float uWide; varying vec2 vUv;
+    float edge(vec4 c, vec4 o){
+      bool ci = c.w > 0.0, oi = o.w > 0.0;
+      if (ci != oi) return ci ? 1.0 : 0.0;          // silhouette, drawn on the object side
+      if (!ci) return 0.0;
+      return o.w - c.w > uGap ? 1.0 : 0.0;           // this pixel is in front of a part behind it
+    }
+    float around(vec4 c, float k){
+      vec2 dx = vec2(uTexel.x * k, 0.0), dy = vec2(0.0, uTexel.y * k);
+      return max(max(edge(c, texture2D(tN, vUv + dx)), edge(c, texture2D(tN, vUv - dx))),
+                 max(edge(c, texture2D(tN, vUv + dy)), edge(c, texture2D(tN, vUv - dy))));
+    }
+    void main(){
+      vec4 c = texture2D(tN, vUv);
+      float e = max(around(c, 1.0), around(c, uWide));   // ~1.5 px outline, same weight as the detail lines
+      if (e < 0.5) discard;
+      gl_FragColor = vec4(uColor, 1.0);
+    }`});
+edgeMat.uniforms.uWide = {value: 2};
+const edgeScene = new THREE.Scene(), edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+{ const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), edgeMat); q.frustumCulled = false; edgeScene.add(q); }
+const _clear = new THREE.Color();
+function renderFrame() {
+  // 1. normals + depth of the screw only
+  const bg = scene.background, gv = grid.visible, ca = renderer.getClearAlpha();
+  renderer.getClearColor(_clear);
+  scene.background = null; grid.visible = false; scene.overrideMaterial = nrmMat;
+  if (featureLines) featureLines.visible = false;
+  renderer.setRenderTarget(nrmRT); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(scene, camera);
+  renderer.setRenderTarget(null); renderer.setClearColor(_clear, ca);
+  scene.overrideMaterial = null; scene.background = bg; grid.visible = gv;
+  if (featureLines) featureLines.visible = true;
+  // 2. stage + grid, 3. stage-coloured screw on top (hides the grid behind it), 4. edges on top
+  assembly.visible = false; renderer.render(scene, camera); assembly.visible = true;
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  scene.background = null; grid.visible = false;
+  renderer.render(scene, camera);
+  scene.background = bg; grid.visible = gv;
+  renderer.render(edgeScene, edgeCam);
+  renderer.autoClear = true;
+}
 
 function applyMaterial() {
-  const f = FINISHES[state.finish];
-  material.color.set(f.color ?? state.color);
-  material.metalness = f.metal; material.roughness = state.rough;
-  material.clearcoat = state.finish === 'black' ? 0.35 : 0;
-  material.wireframe = state.wire;
+  material.color.set('#ffffff');                 // white body
+  edgeMat.uniforms.uColor.value.set('#000000');  // black outline
+  lineMat.color.set('#000000');
 }
 
 function buildParts(p, T) {
+  LINES = [];
   const parts = [];
   if (p.showScrew) parts.push(...buildShank(p, T), ...buildHead(p));
   if (p.showNut) {
@@ -738,10 +930,16 @@ function rebuild() {
   assembly.clear();
   const T = threadModel(state);
   const parts = buildParts(state, T);
-  for (const g of parts) {
-    const mesh = new THREE.Mesh(g, material);
-    mesh.castShadow = mesh.receiveShadow = true;
-    assembly.add(mesh);
+  for (const g of parts) assembly.add(new THREE.Mesh(g, material));
+  // detail lines as one fat-line object (polylines -> segment pairs)
+  const segs = [];
+  for (const pl of LINES) for (let i = 0; i + 1 < pl.length; i++) segs.push(pl[i].x, pl[i].y, pl[i].z, pl[i + 1].x, pl[i + 1].y, pl[i + 1].z);
+  featureLines = null;
+  if (segs.length) {
+    const lg = new LineSegmentsGeometry(); lg.setPositions(segs);
+    featureLines = new LineSegments2(lg, lineMat);
+    featureLines.userData.polylines = LINES;
+    assembly.add(featureLines);
   }
   assembly.rotation.set(THREE.MathUtils.degToRad(state.rotX), THREE.MathUtils.degToRad(state.rotY), THREE.MathUtils.degToRad(state.rotZ));
   assembly.updateMatrixWorld(true);
@@ -760,6 +958,7 @@ function rebuild() {
   grid.scale.setScalar(r * 6000);
   grid.position.set(sph.center.x, box.min.y - 0.02, sph.center.z);
   grid.visible = state.grid;
+  edgeMat.uniforms.uGap.value = r * 0.06;
   main.style.color = light ? '#222' : '';
   floor.material.opacity = light ? 0.25 : 0.4;
   key.position.set(sph.center.x + r * 2, sph.center.y + r * 3, sph.center.z + r * 1.6);
@@ -815,6 +1014,31 @@ function fitView() {
   controls.update();
 }
 
+/* Camera angles. Orbit = turn around the object, Elevation = look from above/below, Roll = tilt the frame.
+   Dragging the view updates the Orbit and Elevation sliders; the sliders move the camera. */
+function applyOrbit() {
+  const dist = camera.position.distanceTo(controls.target) || 1;
+  const az = THREE.MathUtils.degToRad(state.camAz), el = THREE.MathUtils.degToRad(state.camEl);
+  camera.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el))
+    .multiplyScalar(dist).add(controls.target);
+  syncingFromSliders = true; controls.update(); syncingFromSliders = false;
+}
+let syncingFromSliders = false;
+function syncAnglesFromView() {
+  if (syncingFromSliders) return;
+  const v = camera.position.clone().sub(controls.target);
+  const az = Math.round(THREE.MathUtils.radToDeg(Math.atan2(v.x, v.z)));
+  const el = Math.round(THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(v.y / (v.length() || 1), -1, 1))));
+  if (az === state.camAz && el === state.camEl) return;
+  state.camAz = az; state.camEl = el;
+  for (const k of ['camAz', 'camEl']) {
+    const {el: slider, num} = inputs[k];
+    slider.value = state[k];
+    if (document.activeElement !== num) num.value = state[k];
+  }
+}
+controls.addEventListener('change', syncAnglesFromView);
+
 // React to the Camera controls. Returns true when it already re-framed the view.
 let camApplied = '';
 function applyCamera() {
@@ -849,11 +1073,11 @@ function updateLabel(T) {
     const drive = s.head === 'hex' || s.head === 'none' || s.drive === 'none' ? '' : ', ' + DRIVES.find(d => d[0] === s.drive)[1];
     kicker = (s.head === 'none' ? 'Threaded rod' : head + ' head') + drive + (s.showNut ? ' + nut' : '');
     big = `${size}×${mm(s.length)}`;
-    detail = `${thread}${turns ? ` · ${turns.toFixed(1)} turns` : ''} · ${s.threadLen}% threaded · ${FINISHES[s.finish].name}. Dimensions in mm.`;
+    detail = `${thread}${turns ? ` · ${turns.toFixed(1)} turns` : ''} · ${s.threadLen}% threaded. Dimensions in mm.`;
   } else {
     kicker = `${s.nutEdges}-sided nut`;
     big = size;
-    detail = `${mm(s.nutWidth * s.d)} mm across flats · ${mm(s.nutHeight * s.d)} mm tall · ${thread} · ${FINISHES[s.finish].name}.`;
+    detail = `${mm(s.nutWidth * s.d)} mm across flats · ${mm(s.nutHeight * s.d)} mm tall · ${thread}.`;
   }
   const el = document.getElementById('label');
   el.replaceChildren();
@@ -867,12 +1091,22 @@ function schedule() { if (pending) return; pending = true; requestAnimationFrame
 function resize() {
   stageW = Math.max(1, main.clientWidth); stageH = Math.max(1, main.clientHeight);
   renderer.setSize(stageW, stageH, false);
+  const db = renderer.getDrawingBufferSize(new THREE.Vector2());
+  nrmRT.setSize(db.x, db.y);
+  edgeMat.uniforms.uTexel.value.set(1 / db.x, 1 / db.y);
+  edgeMat.uniforms.uWide.value = Math.max(1, Math.round(LINE_PX * renderer.getPixelRatio() / 2));
+  lineMat.resolution.set(stageW, stageH);
   // on wide stages, both cameras nudge the object right so the big caption on the left has room
   updatePersp(); updateOrtho();
 }
 new ResizeObserver(resize).observe(main);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
-renderer.setAnimationLoop(() => { controls.autoRotate = state.autoRotate && !reduceMotion.matches; controls.update(); renderer.render(scene, camera); });
+renderer.setAnimationLoop(() => {
+  controls.autoRotate = state.autoRotate && !reduceMotion.matches;
+  controls.update();
+  if (state.camRoll) { camera.rotateZ(THREE.MathUtils.degToRad(state.camRoll)); camera.updateMatrixWorld(); }
+  renderFrame();
+});
 
 /* ================= export ================= */
 const statusEl = document.getElementById('status');
@@ -934,7 +1168,7 @@ syncExport();
 function savePNG() {
   const bg = scene.background, gv = grid.visible;
   if (transparent) { scene.background = null; grid.visible = false; }
-  renderer.render(scene, camera);
+  renderFrame();
   renderer.domElement.toBlob(b => { scene.background = bg; grid.visible = gv; offerFile(fileBase() + '.png', b); }, 'image/png');
 }
 /* Vector export as pure linework (hidden-line drawing of the current view):
@@ -953,7 +1187,7 @@ function buildLinework() {
   const W = 1600, H = Math.round(1600 * main.clientHeight / main.clientWidth);
   const meshes = [];
   assembly.updateMatrixWorld(true);
-  assembly.traverse(o => o.isMesh && meshes.push(o));
+  assembly.traverse(o => o.isMesh && !o.isLineSegments2 && meshes.push(o));
 
   // 1. depth buffer of the current view (window-space z per pixel)
   const rt = new THREE.WebGLRenderTarget(W, H, {type: THREE.FloatType});
@@ -1024,9 +1258,7 @@ function buildLinework() {
     }
     for (const e of edges.values()) {
       const A = P[e[0]], B = P[e[1]];
-      if (!e[4]) outline.push([A, B]);                       // open border
-      else if (e[3] !== e[5]) outline.push([A, B]);          // silhouette
-      else if (Math.abs(e[2].dot(e[4])) < cosCrease) detail.push([A, B]);   // crease (winding-agnostic)
+      if (e[4] && e[3] !== e[5]) outline.push([A, B]);       // silhouette only; detail comes from the drawn lines
     }
   }
 
@@ -1082,16 +1314,21 @@ function buildLinework() {
     return d;
   };
 
+  // detail: the same deliberate lines shown in the view (thread helix, plane lines, recess outline, hex edges)
+  if (featureLines) for (const pl of featureLines.userData.polylines)
+    for (let i = 0; i + 1 < pl.length; i++) detail.push([pl[i].clone().applyMatrix4(assembly.matrixWorld), pl[i + 1].clone().applyMatrix4(assembly.matrixWorld)]);
   const out = toPath(visibleRuns(outline)), det = toPath(visibleRuns(detail));
   return '<?xml version="1.0" encoding="UTF-8"?>\n'
     + `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">\n`
     + '<g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">\n'
-    + `<g id="detail" stroke-width="0.6"><path d="${det}"/></g>\n`
-    + `<g id="outline" stroke-width="1.4"><path d="${out}"/></g>\n`
+    + `<g id="detail" stroke-width="1"><path d="${det}"/></g>\n`
+    + `<g id="outline" stroke-width="1.2"><path d="${out}"/></g>\n`
     + '</g>\n</svg>\n';
 }
 function saveSTL() {
+  if (featureLines) assembly.remove(featureLines);        // lines are not part of the solid
   const stl = new Uint8Array(new STLExporter().parse(assembly, {binary:true}).buffer);
+  if (featureLines) assembly.add(featureLines);
   const name = fileBase() + '.stl';
   // Hosted pages can only hand out a fixed set of file types, so the STL ships inside a .zip there.
   if (downloadsCap) offerFile(fileBase() + '.stl.zip', zipOne(name, stl));
@@ -1117,5 +1354,10 @@ document.getElementById('random').onclick = () => {
 };
 
 syncUI(); resize(); rebuild(); fitView();
+// bring back the last uploaded engraving image, if any
+try {
+  const saved = JSON.parse(localStorage.getItem(ENG_KEY) || 'null');
+  if (saved && saved.src) loadEngraving(saved.src, saved.name, () => { syncUI(); if (state.drive === 'custom') rebuild(); });
+} catch {}
 </script>
 </html>
