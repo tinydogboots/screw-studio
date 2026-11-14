@@ -173,6 +173,7 @@ const DEFAULTS = {
   runout:0, endScale:0.3,
   nutEdges:6, nutWidth:1.6, nutHeight:0.8, nutPos:70, clearance:0.05, nutChamfer:true,
   segments:96,
+  projection:'perspective', focal:35,
   rotX:0, rotY:0, rotZ:0,
   finish:'zinc', color:'#8fb4ff', rough:0.26,
   autoRotate:false, grid:true, wire:false, bg:'#2b2b2a',
@@ -226,6 +227,9 @@ const SCHEMA = [
   {key:'finish', label:'Material', type:'select', options:Object.entries(FINISHES).map(([k,v])=>[k,v.name])},
   {key:'color', label:'Colour', type:'color'},
   {key:'rough', label:'Roughness', type:'range', min:0.05, max:0.9, step:0.01, unit:''},
+  {section:'Camera'},
+  {key:'projection', label:'View', type:'select', options:[['perspective','Perspective'],['isometric','Isometric']]},
+  {key:'focal', label:'Focal length', type:'range', min:4, max:400, step:1, unit:'mm', log:true},
   {section:'Placement & view'},
   {key:'rotX', label:'Rotate X', type:'range', min:-180, max:180, step:1, unit:'°'},
   {key:'rotY', label:'Rotate Y', type:'range', min:-180, max:180, step:1, unit:'°'},
@@ -295,7 +299,12 @@ for (const s of SCHEMA) {
       if (s.unit) { const u = document.createElement('span'); u.className = 'unit'; u.textContent = s.unit; box.appendChild(u); }
       line.appendChild(box);
       el = document.createElement('input'); el.type = 'range';
-      Object.assign(el, {min:s.min, max:s.max, step:s.step});
+      if (s.log) {   // logarithmic slider: even feel from 4 mm fisheye-wide to 400 mm telephoto
+        const span = Math.log(s.max / s.min);
+        s.toSlider = v => Math.round(1000 * Math.log(v / s.min) / span);
+        s.fromSlider = t => Math.round(s.min * Math.exp(t / 1000 * span));
+        Object.assign(el, {min:0, max:1000, step:1});
+      } else Object.assign(el, {min:s.min, max:s.max, step:s.step});
       num.addEventListener('change', () => {
         let v = parseFloat(num.value); if (isNaN(v)) { syncUI(); return; }
         state[s.key] = Math.min(s.max, Math.max(s.min, v));
@@ -308,7 +317,7 @@ for (const s of SCHEMA) {
     if (s.type === 'range') row.appendChild(el);
     el.id = id;
     el.addEventListener('input', () => {
-      state[s.key] = s.type === 'range' ? parseFloat(el.value) : el.value;
+      state[s.key] = s.type !== 'range' ? el.value : s.log ? s.fromSlider(+el.value) : parseFloat(el.value);
       if (s.key === 'pitch') state.autoPitch = false;
       if (s.key === 'finish' && FINISHES[state.finish].rough != null) state.rough = FINISHES[state.finish].rough;
       if (s.key === 'profile' && state.profile === 'wood' && state.tip === 'chamfer') state.tip = 'point';
@@ -334,7 +343,7 @@ presetSel.addEventListener('change', () => { if (presetSel.value) applyPreset(pr
 // native dropdown lists ignore CSS text-transform on some systems, so uppercase option text directly
 for (const o of document.querySelectorAll('option')) o.text = o.text.toUpperCase();
 function applyPreset(name) {
-  const view = {autoRotate:state.autoRotate, grid:state.grid, wire:state.wire, bg:state.bg};
+  const view = {autoRotate:state.autoRotate, grid:state.grid, wire:state.wire, bg:state.bg, projection:state.projection, focal:state.focal};
   Object.assign(state, DEFAULTS, view, PRESETS[name]);
   state.rough = FINISHES[state.finish].rough ?? state.rough;
   activePreset = name;
@@ -345,7 +354,7 @@ function syncUI() {
   for (const k in inputs) {
     const {el, s, num} = inputs[k];
     if (s.type === 'check') { el.textContent = mark(state[k]) + s.label; el.setAttribute('aria-checked', String(!!state[k])); }
-    else el.value = state[k];
+    else el.value = s.log ? s.toSlider(state[k]) : state[k];
     if (num && document.activeElement !== num) num.value = +(+state[k]).toFixed(3);
   }
   presetSel.value = activePreset;
@@ -361,6 +370,7 @@ function syncUI() {
   off('pointLen', state.tip !== 'point');
   off('nutPos', !state.showScrew);
   off('color', state.finish !== 'custom');
+  off('focal', state.projection === 'isometric');
   for (const g of groups.screw) g.hidden = !state.showScrew;
   for (const g of groups.nut) g.hidden = !state.showNut;
   // diameter lives in the Shank group; move it into the Nut group in nut-only mode
@@ -654,7 +664,7 @@ catch (e) {
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = false;   // no cast shadows on the stage
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 main.prepend(renderer.domElement);
 document.getElementById('loading').remove();
@@ -662,14 +672,20 @@ document.getElementById('loading').remove();
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
-const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 5000);
+// Two cameras: perspective (with a focal length in 35 mm-equivalent terms) and orthographic for isometric.
+const perspCam = new THREE.PerspectiveCamera(35, 1, 0.1, 5000);
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
+let camera = perspCam;
+let orthoHalf = 10, stageW = 1, stageH = 1;
+const ISO_DIR = new THREE.Vector3(1, 1, 1).normalize();          // true isometric: 45° around, 35.26° down
+const PERSP_DIR = new THREE.Vector3(1.1, 0.5, 1.4).normalize();
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.autoRotateSpeed = 1.6;
 const key = new THREE.DirectionalLight(0xffffff, 1.6);
-key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.0004;
+key.castShadow = false;
 scene.add(key, key.target, new THREE.HemisphereLight(0xdfe8ff, 0x30281e, 0.35));
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({opacity:0.4}));
-floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+floor.rotation.x = -Math.PI / 2; floor.visible = false; scene.add(floor);
 
 /* Infinite floor grid (after Superstudio's Supersurface): constant-width lines drawn in the
    shader, fading out toward the horizon and wherever lines get denser than a pixel. */
@@ -684,12 +700,8 @@ const grid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMater
       vec2 fw = fwidth(c);
       vec2 g = abs(fract(c - 0.5) - 0.5) / fw;
       float line = 1.0 - min(min(g.x, g.y) / 1.1, 1.0);
-      // no distance fade: lines run to the horizon. Where cells shrink below a few pixels,
-      // blend toward the lines' average coverage so the far field reads as an even tone, not moire.
-      vec2 cov2 = clamp(fw * 1.1, 0.0, 1.0);
-      float cover = 1.0 - (1.0 - cov2.x) * (1.0 - cov2.y);
-      float k = smoothstep(0.08, 0.3, max(fw.x, fw.y));
-      float a = mix(line * 0.75, cover * 0.32, k);
+      // no fade of any kind: every line runs at full strength to the horizon
+      float a = line * 0.75;
       if (a < 0.004) discard;
       gl_FragColor = vec4(uColor, a);
     }`,
@@ -738,9 +750,9 @@ function rebuild() {
   const box = new THREE.Box3().setFromObject(assembly);
   const sph = box.getBoundingSphere(new THREE.Sphere()), r = sph.radius;
   floor.position.y = box.min.y - 0.01; floor.scale.setScalar(r * 8);
-  // grid cell: a round number of millimetres, roughly a fifth of the object's size
-  let step = Math.pow(10, Math.floor(Math.log10(r)));
-  if (r / step < 2.5) step /= 2;
+  // grid cell: a round number of millimetres (1, 2 or 5 × 10ⁿ) close to the object's radius — big, legible squares
+  const mag = Math.pow(10, Math.floor(Math.log10(r)));
+  const step = [1, 2, 5, 10].map(m => m * mag).reduce((a, b) => Math.abs(b - r) < Math.abs(a - r) ? b : a);
   const bgCol = new THREE.Color(state.bg), light = bgCol.r * 0.3 + bgCol.g * 0.59 + bgCol.b * 0.11 > 0.5;
   const gu = grid.material.uniforms;
   gu.uCell.value = step; gu.uFade.value = r * 28; gu.uCenter.value.copy(sph.center);
@@ -758,20 +770,72 @@ function rebuild() {
 
   scene.background = new THREE.Color(state.bg);
   controls.autoRotate = state.autoRotate;
-  if (!lastRadius || Math.abs(r - lastRadius) / lastRadius > 0.3) fitView();
-  else controls.target.copy(sph.center);
+  const camChanged = applyCamera();
+  if (!camChanged) {
+    if (!lastRadius || Math.abs(r - lastRadius) / lastRadius > 0.3) fitView();
+    else controls.target.copy(sph.center);
+  }
   updateLabel(T);
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
 }
 
+// distance at which the object's bounding sphere fills the frame for the current lens
+// framed by the lens's tangent, so wide lenses move right up to the object (that's where the distortion comes from)
+const frameDistance = r => Math.max(r * 1.1 / Math.tan(perspCam.fov * Math.PI / 360), r * 0.55);
+function setPerspClip(dist) { perspCam.near = Math.max(dist / 100, 0.01); perspCam.far = dist * 4000; }
+function updateOrtho() {
+  const a = stageW / stageH;
+  Object.assign(orthoCam, {top: orthoHalf, bottom: -orthoHalf, left: -orthoHalf * a, right: orthoHalf * a});
+  if (stageW > 700) orthoCam.setViewOffset(stageW, stageH, -stageW * 0.12, 0, stageW, stageH); else orthoCam.clearViewOffset();
+  orthoCam.updateProjectionMatrix();
+}
+function updatePersp() {
+  perspCam.aspect = stageW / stageH;
+  perspCam.setFocalLength(state.focal);   // 35 mm film-equivalent; also updates the projection
+  if (stageW > 700) perspCam.setViewOffset(stageW, stageH, -stageW * 0.12, 0, stageW, stageH); else perspCam.clearViewOffset();
+  perspCam.updateProjectionMatrix();
+}
+
 function fitView() {
   const sph = new THREE.Box3().setFromObject(assembly).getBoundingSphere(new THREE.Sphere());
-  lastRadius = sph.radius;
-  const dist = sph.radius / Math.sin(camera.fov * Math.PI / 360) * 1.08;
+  const r = sph.radius;
+  lastRadius = r;
   controls.target.copy(sph.center);
-  camera.position.copy(sph.center).addScaledVector(new THREE.Vector3(1.1, 0.5, 1.4).normalize(), dist);
-  camera.near = dist / 100; camera.far = dist * 4000;
-  camera.updateProjectionMatrix(); controls.update();
+  if (camera === orthoCam) {
+    orthoHalf = r * 1.15; orthoCam.zoom = 1;
+    orthoCam.position.copy(sph.center).addScaledVector(ISO_DIR, r * 8);
+    orthoCam.near = 0.01; orthoCam.far = r * 80;
+    updateOrtho();
+  } else {
+    updatePersp();
+    const dist = frameDistance(r);
+    perspCam.position.copy(sph.center).addScaledVector(PERSP_DIR, dist);
+    setPerspClip(dist); perspCam.updateProjectionMatrix();
+  }
+  controls.update();
+}
+
+// React to the Camera controls. Returns true when it already re-framed the view.
+let camApplied = '';
+function applyCamera() {
+  const keyNow = state.projection + '|' + state.focal;
+  if (keyNow === camApplied) return false;
+  const first = camApplied === '';
+  camApplied = keyNow;
+  const want = state.projection === 'isometric' ? orthoCam : perspCam;
+  if (want !== camera) {
+    camera = want; controls.object = camera;
+    if (!first) { fitView(); return true; }
+    return false;
+  }
+  if (first || camera !== perspCam || !lastRadius) return false;
+  // focal length changed: dolly so the object keeps its size (wide = close and distorted, long = far and flat)
+  const dir = perspCam.position.clone().sub(controls.target).normalize();
+  updatePersp();
+  const dist = frameDistance(lastRadius);
+  perspCam.position.copy(controls.target).addScaledVector(dir, dist);
+  setPerspClip(dist); perspCam.updateProjectionMatrix(); controls.update();
+  return true;
 }
 
 function updateLabel(T) {
@@ -801,11 +865,10 @@ function updateLabel(T) {
 let pending = false;
 function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; rebuild(); }); }
 function resize() {
-  const w = main.clientWidth, h = main.clientHeight;
-  renderer.setSize(w, h, false); camera.aspect = w / h;
-  // on wide stages, nudge the object right so the big caption on the left has room
-  if (w > 700) camera.setViewOffset(w, h, -w * 0.12, 0, w, h); else camera.clearViewOffset();
-  camera.updateProjectionMatrix();
+  stageW = Math.max(1, main.clientWidth); stageH = Math.max(1, main.clientHeight);
+  renderer.setSize(stageW, stageH, false);
+  // on wide stages, both cameras nudge the object right so the big caption on the left has room
+  updatePersp(); updateOrtho();
 }
 new ResizeObserver(resize).observe(main);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -911,7 +974,9 @@ function buildLinework() {
   rt.dispose(); depthMat.dispose();
 
   const near = camera.near, far = camera.far;
-  const lin = z => (2 * near * far) / (far + near - (z * 2 - 1) * (far - near));
+  const ortho = camera.isOrthographicCamera;
+  const lin = ortho ? z => near + z * (far - near)          // orthographic depth is already linear
+                    : z => (2 * near * far) / (far + near - (z * 2 - 1) * (far - near));
   const depthAt = (px, py) => {          // most distant depth in a 3x3 neighbourhood (lenient at silhouettes)
     let m = 0;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -922,7 +987,7 @@ function buildLinework() {
   };
 
   // 2. collect candidate edges per mesh
-  const camPos = camera.position;
+  const camPos = camera.position, viewDir = camera.getWorldDirection(new THREE.Vector3());
   const outline = [], detail = [];
   const cosCrease = Math.cos(THREE.MathUtils.degToRad(12));
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
@@ -948,7 +1013,8 @@ function buildLinework() {
       if (n.lengthSq() < 1e-14) continue;
       n.normalize();
       vc.copy(P[a]).add(P[b]).add(P[c]).multiplyScalar(1 / 3);
-      const facing = n.dot(vc.sub(camPos).negate()) > 0;
+      // perspective: compare with the ray to the eye; orthographic: with the fixed view direction
+      const facing = ortho ? n.dot(viewDir) < 0 : n.dot(vc.sub(camPos).negate()) > 0;
       for (const [u, w] of [[a, b], [b, c], [c, a]]) {
         const k = u < w ? u * 4194304 + w : w * 4194304 + u;
         const e = edges.get(k);
