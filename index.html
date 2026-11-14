@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Screw Studio</title>
+<title>Screw Around</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -120,7 +120,7 @@
     <div id="controls">
       <header class="brand">
         <span class="brand-big">Screw</span>
-        <span class="brand-big">Studio</span>
+        <span class="brand-big">Around</span>
       </header>
     </div>
     <footer>
@@ -173,7 +173,7 @@ const FINISHES = {
   custom:{name:'Custom colour',color:null,metal:0.9,rough:null},
 };
 const DEFAULTS = {
-  style:'outline', showScrew:true, showNut:false,
+  style:'outline', kind:'screw', showScrew:true, showNut:false,
   bmThreshold:50, bmContrast:0, bmShine:0, bmLight:-40, bmMethod:'jjn', bmJJN:24, bmStucki:26, bmAtkinson:26,
   head:'pan', headScale:1, drive:'phillips', flange:false,
   engScale:70, engDepth:0.6, engRot:0, engInvert:false,
@@ -187,25 +187,12 @@ const DEFAULTS = {
   finish:'zinc', color:'#8fb4ff', rough:0.26,
   autoRotate:false, grid:false, wire:false, bg:'#f2f2f2',   // stage: 5% black, no grid for now
 };
-const PRESETS = {
-  'Machine screw M4×16 · pan Phillips': {head:'pan',drive:'phillips',d:4,length:16,finish:'zinc'},
-  'Socket cap M6×30 · hex socket':      {head:'socket',drive:'hex',d:6,length:30,threadLen:65,finish:'black'},
-  'Hex bolt M12×60 with nut':           {head:'hex',drive:'none',d:12,length:60,threadLen:50,finish:'steel',flange:true,showNut:true,nutPos:72},
-  'Wood screw 5×50 · countersunk Pozi': {head:'flat',drive:'pozidriv',d:5,length:50,threadLen:60,tip:'point',profile:'wood',finish:'yellowzinc'},
-  'Deck screw 5×70 · Torx':             {head:'flat',drive:'torx',d:5,length:70,threadLen:65,tip:'point',pointLen:1.6,profile:'wood',finish:'black'},
-  'Brass screw 4×25 · raised csk slot': {head:'oval',drive:'slotted',d:4,length:25,threadLen:70,tip:'point',profile:'wood',finish:'brass'},
-  'Button head M8×20 · hex socket':     {head:'button',drive:'hex',d:8,length:20,finish:'stainless'},
-  'Threaded rod M8×50 + nut':           {head:'none',d:8,length:50,finish:'zinc',showNut:true,nutPos:40},
-  'Printable bolt 20 mm · chunky':      {head:'hex',d:20,length:40,pitch:4,autoPitch:false,threadScale:1.2,runout:1,endScale:0.2,
-                                         finish:'nylon',showNut:true,nutPos:100,clearance:0.3,segments:64},
-  'Nut only · M10 square':              {showScrew:false,showNut:true,d:10,nutEdges:4,nutWidth:1.7,nutHeight:0.9,finish:'stainless'},
-};
+// (presets removed: every setting they used has its own control in the panel)
 const mm = v => (+v).toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '');
 const SCHEMA = [
-  {section:'Generate'},
+  {section:'Visualization'},
   {key:'style', label:'Style', type:'select', options:[['outline','Outline'],['render','Rendering'],['bitmap','Bitmap']]},
-  {key:'showScrew', label:'Screw', type:'check'},
-  {key:'showNut', label:'Nut', type:'check'},
+  {key:'kind', label:'Type', type:'select', options:[['screw','Screw'],['nut','Nut'],['both','Screw + nut']]},
   {section:'Bitmap', group:'bitmap'},
   {key:'bmThreshold', label:'Threshold', type:'range', min:0, max:100, step:1, unit:'', quick:true},
   {key:'bmContrast', label:'Contrast', type:'range', min:-100, max:100, step:1, unit:'', quick:true},
@@ -250,14 +237,10 @@ const SCHEMA = [
   {section:'Camera'},
   {key:'projection', label:'View', type:'select', options:[['perspective','Perspective'],['isometric','Isometric']]},
   {key:'focal', label:'Focal length', type:'range', min:4, max:400, step:1, unit:'mm', log:true},
-  {key:'camAz', label:'Orbit', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
-  {key:'camEl', label:'Elevation', type:'range', min:-89, max:89, step:1, unit:'°', live:true},
-  {key:'camRoll', label:'Roll', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
-  {section:'Placement & view'},
-  {key:'rotX', label:'Rotate X', type:'range', min:-180, max:180, step:1, unit:'°'},
-  {key:'rotY', label:'Rotate Y', type:'range', min:-180, max:180, step:1, unit:'°'},
-  {key:'rotZ', label:'Rotate Z', type:'range', min:-180, max:180, step:1, unit:'°'},
-  {key:'autoRotate', label:'Turntable', type:'check'},
+  // the camera turns around the screw: tilt over (X), around the vertical (Y), and around the view (Z)
+  {key:'camEl', label:'Rotate (X)', type:'range', min:-89, max:89, step:1, unit:'°', live:true},
+  {key:'camAz', label:'Rotate (Y)', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
+  {key:'camRoll', label:'Rotate (Z)', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
 ];
 
 /* ================= state ================= */
@@ -265,7 +248,7 @@ const STORE_KEY = 'screw-studio-v4';
 const state = {...DEFAULTS};
 try { const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
   // turntable always starts off; it only spins when switched on in this visit
-  if (saved) for (const k in DEFAULTS) if (!['autoRotate', 'grid', 'bg'].includes(k) && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
+  if (saved) for (const k in DEFAULTS) if (!['autoRotate', 'grid', 'bg', 'rotX', 'rotY', 'rotZ'].includes(k) && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
 if (!state.showScrew && !state.showNut) state.showScrew = true;
 
 /* ================= UI ================= */
@@ -357,6 +340,7 @@ for (const s of SCHEMA) {
     el.addEventListener('input', () => {
       state[s.key] = s.type !== 'range' ? el.value : s.log ? s.fromSlider(+el.value) : parseFloat(el.value);
       if (s.live) { applyOrbit(); if (num) num.value = state[s.key]; return; }
+      if (s.key === 'kind') { state.showScrew = state.kind !== 'nut'; state.showNut = state.kind !== 'screw'; }
       if (s.quick) { touched(); syncUI(); quickUpdate(); return; }   // look-only settings: no geometry rebuild
       if (s.key === 'pitch') state.autoPitch = false;
       if (s.key === 'profile' && state.profile === 'wood' && state.tip === 'chamfer') state.tip = 'point';
@@ -367,36 +351,17 @@ for (const s of SCHEMA) {
   inputs[s.key] = {el, s, row, num};
 }
 
-// preset picker, first row of the Generate group
-const presetSel = document.createElement('select'); presetSel.id = 'c_preset';
-presetSel.add(new Option('Custom', ''));
-for (const name in PRESETS) presetSel.add(new Option(name, name));
-presetSel.addEventListener('change', () => { if (presetSel.value) applyPreset(presetSel.value); else { activePreset = ''; } });
-{
-  const row = document.createElement('div'); row.className = 'row';
-  const line = document.createElement('div'); line.className = 'line';
-  const lab = document.createElement('label'); lab.htmlFor = 'c_preset'; lab.textContent = 'Preset';
-  line.append(lab, presetSel); row.appendChild(line);
-  ctl.querySelector('.grp-body').prepend(row);
-}
 // native dropdown lists ignore CSS text-transform on some systems, so uppercase option text directly
 for (const o of document.querySelectorAll('option')) o.text = o.text.toUpperCase();
-function applyPreset(name) {
-  const view = {autoRotate:state.autoRotate, grid:state.grid, wire:state.wire, bg:state.bg, projection:state.projection, focal:state.focal};
-  Object.assign(state, DEFAULTS, view, PRESETS[name]);
-  state.rough = FINISHES[state.finish].rough ?? state.rough;
-  activePreset = name;
-  syncUI(); rebuild(); fitView();
-}
 
 function syncUI() {
+  state.kind = state.showScrew && state.showNut ? 'both' : state.showNut ? 'nut' : 'screw';
   for (const k in inputs) {
     const {el, s, num} = inputs[k];
     if (s.type === 'check') { el.textContent = mark(state[k]) + s.label; el.setAttribute('aria-checked', String(!!state[k])); }
     else if (s.type !== 'file') el.value = s.log ? s.toSlider(state[k]) : state[k];
     if (num && document.activeElement !== num) num.value = +(+state[k]).toFixed(3);
   }
-  presetSel.value = activePreset;
   const P = effectivePitch(state);
   if (state.autoPitch) { inputs.pitch.el.value = P; inputs.pitch.num.value = P; }
   const noThread = state.profile === 'none';
@@ -1241,27 +1206,23 @@ function applyCamera() {
 }
 
 function updateLabel(T) {
-  const s = state, size = (s.profile === 'metric' ? 'M' : 'Ø') + mm(s.d);
-  const thread = s.profile === 'none' ? 'unthreaded'
-    : `pitch ${T.P.toFixed(2)} mm${s.leftHand ? ' LH' : ''}`;
-  let kicker, big, detail;
-  if (s.showScrew) {
-    const turns = s.profile === 'none' ? 0 : s.length * s.threadLen / 100 / T.P;
-    const head = HEADS.find(h => h[0] === s.head)[1].replace(/ \(.*\)/, '');
-    const drive = s.head === 'hex' || s.head === 'none' || s.drive === 'none' ? '' : ', ' + DRIVES.find(d => d[0] === s.drive)[1];
-    kicker = (s.head === 'none' ? 'Threaded rod' : head + ' head') + drive + (s.showNut ? ' + nut' : '');
-    big = `${size}×${mm(s.length)}`;
-    detail = `${thread}${turns ? ` · ${turns.toFixed(1)} turns` : ''} · ${s.threadLen}% threaded. Dimensions in mm.`;
-  } else {
-    kicker = `${s.nutEdges}-sided nut`;
-    big = size;
-    detail = `${mm(s.nutWidth * s.d)} mm across flats · ${mm(s.nutHeight * s.d)} mm tall · ${thread}.`;
-  }
+  // Just the size you would ask for in a hardware store:
+  //   metric thread  M6 × 30        (fine pitch spelled out: M8 × 1 × 20; left-hand adds LH)
+  //   wood screw     5.0 × 50       (diameter × length in mm)
+  //   smooth pin     Ø6 × 30
+  //   nut on its own M10
+  const s = state, n = v => mm(v);
+  const coarse = effectivePitch({...s, autoPitch: true});
+  const fine = s.profile === 'metric' && Math.abs(T.P - coarse) > 0.001;
+  const lh = s.profile !== 'none' && s.leftHand ? ' LH' : '';
+  let thread;
+  if (s.profile === 'metric') thread = 'M' + n(s.d) + (fine ? ' × ' + n(T.P) : '');
+  else if (s.profile === 'wood') thread = (+s.d).toFixed(1);
+  else thread = 'Ø' + n(s.d);
+  const big = (s.showScrew ? thread + ' × ' + n(s.length) : thread) + lh;
   const el = document.getElementById('label');
   el.replaceChildren();
-  for (const [cls, text, tag] of [['kicker', kicker, 'span'], ['big', big, 'b'], ['fine', detail, 'span']]) {
-    const n = document.createElement(tag); n.className = cls; n.textContent = text; el.appendChild(n);
-  }
+  const b = document.createElement('b'); b.className = 'big'; b.textContent = big; el.appendChild(b);
 }
 
 let pending = false;
