@@ -98,7 +98,11 @@
 
   @media (max-width:760px){
     #app{display:flex;flex-direction:column;height:auto}
-    main{height:56vh;order:1;border-bottom:1px dotted var(--rule)}
+    /* phones: the 3D view sticks to the top while the controls scroll underneath, so every edit stays in sight */
+    main{height:45vh;height:45svh;order:1;border-bottom:1px dotted var(--rule);
+      position:sticky;top:env(safe-area-inset-top, 0px);z-index:5}
+    #label{left:14px;top:12px}
+    #label .big{font-size:30px}
     #panel{order:2;border:0;padding-right:env(safe-area-inset-right, 0px)}
     #controls{overflow:visible}
     #hint{display:none}
