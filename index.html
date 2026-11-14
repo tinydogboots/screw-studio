@@ -708,7 +708,9 @@ function loadEngraving(src, name, done) {
       m[i] = transparent ? al : (1 - lum) * al;   // transparent art: cut the opaque shapes; flat art: cut the dark marks
     }
     ENG.mask = m; ENG.name = name;
-    try { localStorage.setItem(ENG_KEY, JSON.stringify({name, src: c.toDataURL('image/png')})); } catch {}
+    // remember the original upload (re-processing it gives the same result next visit)
+    try { localStorage.setItem(ENG_KEY, JSON.stringify({name, src})); }
+    catch { try { localStorage.removeItem(ENG_KEY); } catch {} }   // too big to keep: it just won't come back after a reload
     done && done();
   };
   img.onerror = () => { say('That file could not be read as an image. Try a PNG, JPG or SVG.'); };
@@ -814,9 +816,9 @@ const ISO_DIR = new THREE.Vector3(1, 1, 1).normalize();          // true isometr
 const PERSP_DIR = new THREE.Vector3(1.1, 0.5, 1.4).normalize();
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.autoRotateSpeed = 1.6;
-const key = new THREE.DirectionalLight(0xffffff, 1.6);
+const key = new THREE.DirectionalLight(0xffffff, Math.PI * 0.95);   // toon shading: white faces land at full white
 key.castShadow = false;
-scene.add(key, key.target, new THREE.HemisphereLight(0xdfe8ff, 0x30281e, 0.35));
+scene.add(key, key.target, new THREE.AmbientLight(0xffffff, Math.PI * 0.08));
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({opacity:0.4}));
 floor.rotation.x = -Math.PI / 2; floor.visible = false; scene.add(floor);
 
@@ -848,7 +850,15 @@ scene.add(grid);
    - detail:  deliberate 3D lines from the builders (one helix per thread turn, a line where
      surfaces meet on the head, the recess outline, hex/nut edges), hidden where the body covers them */
 const LINE_PX = 1.6;
-const material = new THREE.MeshBasicMaterial({side: THREE.DoubleSide, toneMapped: false, color: 0xffffff,
+// Grayscale shading in a few flat steps (illustration style): faces toward the light stay white,
+// walls of recesses and engravings fall into light and mid greys, so depth reads at a glance.
+const toneRamp = (() => {
+  const steps = [105, 165, 215, 255];          // shadow, mid, light, white (0-255 grey)
+  const t = new THREE.DataTexture(new Uint8Array(steps.flatMap(v => [v, v, v, 255])), steps.length, 1, THREE.RGBAFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+  return t;
+})();
+const material = new THREE.MeshToonMaterial({side: THREE.DoubleSide, toneMapped: false, color: 0xffffff, gradientMap: toneRamp,
   polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1});   // lets lines on the surface win the depth test
 const lineMat = new LineMaterial({color: 0x000000, linewidth: LINE_PX, worldUnits: false, toneMapped: false});
 const assembly = new THREE.Group();
@@ -885,7 +895,12 @@ edgeMat.uniforms.uWide = {value: 2};
 const edgeScene = new THREE.Scene(), edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 { const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), edgeMat); q.frustumCulled = false; edgeScene.add(q); }
 const _clear = new THREE.Color();
+const _lightDir = new THREE.Vector3();
 function renderFrame() {
+  // light rides with the camera (upper left, toward the viewer) so the shading reads the same from every angle
+  _lightDir.set(-0.75, 0.7, 0.45).normalize().applyQuaternion(camera.quaternion);
+  key.position.copy(controls.target).addScaledVector(_lightDir, 100);
+  key.target.position.copy(controls.target); key.target.updateMatrixWorld();
   // 1. normals + depth of the screw only
   const bg = scene.background, gv = grid.visible, ca = renderer.getClearAlpha();
   renderer.getClearColor(_clear);
