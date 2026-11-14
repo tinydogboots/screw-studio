@@ -860,6 +860,8 @@ const toneRamp = (() => {
 })();
 const material = new THREE.MeshToonMaterial({side: THREE.DoubleSide, toneMapped: false, color: 0xffffff, gradientMap: toneRamp,
   polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1});   // lets lines on the surface win the depth test
+// No visible fill for now: the body only writes depth, so lines behind it stay hidden but nothing is painted.
+material.colorWrite = false;
 const lineMat = new LineMaterial({color: 0x000000, linewidth: LINE_PX, worldUnits: false, toneMapped: false});
 const assembly = new THREE.Group();
 scene.add(assembly);
