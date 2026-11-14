@@ -129,7 +129,7 @@
         <button type="button" id="reset">Reset</button>
       </div>
       <div class="frow"><span>Output format</span>
-        <span class="fmt"><button type="button" data-fmt="png" aria-pressed="true">PNG</button><button type="button" data-fmt="stl" aria-pressed="false">STL</button></span></div>
+        <span class="fmt"><button type="button" data-fmt="png" aria-pressed="true">PNG</button><button type="button" data-fmt="svg" aria-pressed="false">SVG</button><button type="button" data-fmt="stl" aria-pressed="false">STL</button></span></div>
       <button type="button" class="check" id="transparent">[ ] Transparent background</button>
       <button type="button" class="exportbtn" id="export"><span>Export</span><kbd>cmd + S</kbd></button>
       <div id="status" role="status"></div>
@@ -178,7 +178,7 @@ const DEFAULTS = {
   segments:96,
   rotX:0, rotY:0, rotZ:0,
   finish:'zinc', color:'#8fb4ff', rough:0.26,
-  autoRotate:true, grid:true, wire:false, bg:'#2b2b2a',
+  autoRotate:false, grid:true, wire:false, bg:'#2b2b2a',
 };
 const PRESETS = {
   'Machine screw M4×16 · pan Phillips': {head:'pan',drive:'phillips',d:4,length:16,finish:'zinc'},
@@ -243,7 +243,8 @@ const SCHEMA = [
 const STORE_KEY = 'screw-studio-v4';
 const state = {...DEFAULTS};
 try { const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-  if (saved) for (const k in DEFAULTS) if (k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
+  // turntable always starts off; it only spins when switched on in this visit
+  if (saved) for (const k in DEFAULTS) if (k !== 'autoRotate' && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
 if (!state.showScrew && !state.showNut) state.showScrew = true;
 
 /* ================= UI ================= */
@@ -708,18 +709,23 @@ function applyMaterial() {
   material.wireframe = state.wire;
 }
 
+function buildParts(p, T) {
+  const parts = [];
+  if (p.showScrew) parts.push(...buildShank(p, T), ...buildHead(p));
+  if (p.showNut) {
+    const H = p.nutHeight * p.d;
+    const yTop = p.showScrew ? -(p.nutPos / 100) * Math.max(0, p.length - H) : H / 2;
+    parts.push(...buildNut(p, T, yTop));
+  }
+  return parts;
+}
+
 let lastRadius = 0;
 function rebuild() {
   assembly.traverse(o => o.geometry && o.geometry.dispose());
   assembly.clear();
   const T = threadModel(state);
-  const parts = [];
-  if (state.showScrew) parts.push(...buildShank(state, T), ...buildHead(state));
-  if (state.showNut) {
-    const H = state.nutHeight * state.d;
-    const yTop = state.showScrew ? -(state.nutPos / 100) * Math.max(0, state.length - H) : H / 2;
-    parts.push(...buildNut(state, T, yTop));
-  }
+  const parts = buildParts(state, T);
   for (const g of parts) {
     const mesh = new THREE.Mesh(g, material);
     mesh.castShadow = mesh.receiveShadow = true;
@@ -855,9 +861,10 @@ transBtn.onclick = () => { transparent = !transparent; syncExport(); };
 for (const b of document.querySelectorAll('.fmt button')) b.onclick = () => { exportFmt = b.dataset.fmt; syncExport(); };
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 document.querySelector('#export kbd').textContent = isMac ? 'cmd + S' : 'ctrl + S';
-document.getElementById('export').onclick = () => exportFmt === 'png' ? savePNG() : saveSTL();
+const doExport = () => ({png: savePNG, svg: saveSVG, stl: saveSTL})[exportFmt]();
+document.getElementById('export').onclick = doExport;
 addEventListener('keydown', e => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); exportFmt === 'png' ? savePNG() : saveSTL(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); doExport(); }
 });
 syncExport();
 
@@ -866,6 +873,156 @@ function savePNG() {
   if (transparent) { scene.background = null; grid.visible = false; }
   renderer.render(scene, camera);
   renderer.domElement.toBlob(b => { scene.background = bg; grid.visible = gv; offerFile(fileBase() + '.png', b); }, 'image/png');
+}
+/* Vector export as pure linework (hidden-line drawing of the current view):
+   - outline: silhouette edges and open mesh borders (rims, tips), heavier stroke
+   - detail:  creases sharper than ~20° (thread crests and roots, hex edges, drive recesses)
+   Hidden portions are removed by testing sample points against a GPU depth render. */
+function saveSVG() {
+  say('Building SVG…');
+  setTimeout(() => {
+    try { offerFile(fileBase() + '.svg', new Blob([buildLinework()], {type: 'image/svg+xml'})); }
+    catch (e) { say('Could not build SVG: ' + e.message); }
+  }, 30);
+}
+
+function buildLinework() {
+  const W = 1600, H = Math.round(1600 * main.clientHeight / main.clientWidth);
+  const meshes = [];
+  assembly.updateMatrixWorld(true);
+  assembly.traverse(o => o.isMesh && meshes.push(o));
+
+  // 1. depth buffer of the current view (window-space z per pixel)
+  const rt = new THREE.WebGLRenderTarget(W, H, {type: THREE.FloatType});
+  const depthMat = new THREE.ShaderMaterial({side: THREE.DoubleSide,
+    vertexShader: 'void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'void main(){ gl_FragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0); }'});
+  const saved = {bg: scene.background, grid: grid.visible, floor: floor.visible, clear: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha()};
+  const mats = meshes.map(m => m.material);
+  meshes.forEach(m => m.material = depthMat);
+  scene.background = null; grid.visible = false; floor.visible = false;
+  renderer.setClearColor(new THREE.Color(1, 1, 1), 1);
+  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, camera); renderer.setRenderTarget(null);
+  const buf = new Float32Array(W * H * 4);
+  renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf);
+  meshes.forEach((m, i) => m.material = mats[i]);
+  scene.background = saved.bg; grid.visible = saved.grid; floor.visible = saved.floor;
+  renderer.setClearColor(saved.clear, saved.alpha);
+  rt.dispose(); depthMat.dispose();
+
+  const near = camera.near, far = camera.far;
+  const lin = z => (2 * near * far) / (far + near - (z * 2 - 1) * (far - near));
+  const depthAt = (px, py) => {          // most distant depth in a 3x3 neighbourhood (lenient at silhouettes)
+    let m = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = Math.min(W - 1, Math.max(0, px + dx)), y = Math.min(H - 1, Math.max(0, py + dy));
+      m = Math.max(m, buf[(y * W + x) * 4]);
+    }
+    return m;
+  };
+
+  // 2. collect candidate edges per mesh
+  const camPos = camera.position;
+  const outline = [], detail = [];
+  const cosCrease = Math.cos(THREE.MathUtils.degToRad(12));
+  const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+  for (const mesh of meshes) {
+    const pos = mesh.geometry.attributes.position, idx = mesh.geometry.index;
+    const nTri = (idx ? idx.count : pos.count) / 3;
+    // weld vertices by position so edges are shared between neighbouring triangles
+    const ids = new Map(), P = [];
+    const vid = i => {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const k = Math.round(x * 1e4) + ',' + Math.round(y * 1e4) + ',' + Math.round(z * 1e4);
+      let v = ids.get(k);
+      if (v === undefined) { v = P.length; ids.set(k, v); P.push(new THREE.Vector3(x, y, z).applyMatrix4(mesh.matrixWorld)); }
+      return v;
+    };
+    const edges = new Map();   // key -> [a, b, n1, f1, n2, f2]
+    for (let t = 0; t < nTri; t++) {
+      const i0 = idx ? idx.getX(t * 3) : t * 3, i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      const a = vid(i0), b = vid(i1), c = vid(i2);
+      if (a === b || b === c || a === c) continue;
+      va.subVectors(P[b], P[a]); vb.subVectors(P[c], P[a]);
+      const n = new THREE.Vector3().crossVectors(va, vb);
+      if (n.lengthSq() < 1e-14) continue;
+      n.normalize();
+      vc.copy(P[a]).add(P[b]).add(P[c]).multiplyScalar(1 / 3);
+      const facing = n.dot(vc.sub(camPos).negate()) > 0;
+      for (const [u, w] of [[a, b], [b, c], [c, a]]) {
+        const k = u < w ? u * 4194304 + w : w * 4194304 + u;
+        const e = edges.get(k);
+        if (!e) edges.set(k, [u, w, n, facing, null, null]);
+        else if (!e[4]) { e[4] = n; e[5] = facing; }
+      }
+    }
+    for (const e of edges.values()) {
+      const A = P[e[0]], B = P[e[1]];
+      if (!e[4]) outline.push([A, B]);                       // open border
+      else if (e[3] !== e[5]) outline.push([A, B]);          // silhouette
+      else if (Math.abs(e[2].dot(e[4])) < cosCrease) detail.push([A, B]);   // crease (winding-agnostic)
+    }
+  }
+
+  // 3. clip each edge to its visible runs in screen space
+  const toScreen = v => { const p = v.clone().project(camera); return [(p.x * .5 + .5) * W, (1 - (p.y * .5 + .5)) * H, p.z * .5 + .5]; };
+  const visibleRuns = list => {
+    const runs = [];
+    for (const [A, B] of list) {
+      const a = toScreen(A), b = toScreen(B);
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const n = Math.max(2, Math.ceil(len / 1.5) + 1);
+      let run = null;
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+        // perspective-correct depth: interpolate in world space, then project
+        const z = toScreen(va.copy(A).lerp(B, t))[2];
+        const px = Math.floor(x), py = H - 1 - Math.floor(y);
+        const inside = px >= 0 && px < W && py >= 0 && py < H;
+        const zl = lin(z);
+        const vis = inside && zl <= lin(depthAt(px, py)) * 1.004 + 0.002;
+        if (vis) { if (!run) { run = []; runs.push(run); } run.push([x, y]); }
+        else run = null;
+      }
+    }
+    return runs.filter(r => r.length > 1).map(r => [r[0], r[r.length - 1]]);
+  };
+
+  // 4. chain touching segments into longer polylines, then write path data
+  const toPath = segs => {
+    const key = p => Math.round(p[0] * 4) + ',' + Math.round(p[1] * 4);
+    const byPt = new Map(), used = new Uint8Array(segs.length);
+    segs.forEach((s, i) => { for (const p of s) { const k = key(p); (byPt.get(k) || byPt.set(k, []).get(k)).push(i); } });
+    const next = (pt) => { for (const i of byPt.get(key(pt)) || []) if (!used[i]) return i; return -1; };
+    const f = v => (Math.round(v * 10) / 10);
+    let d = '';
+    for (let s = 0; s < segs.length; s++) {
+      if (used[s]) continue;
+      used[s] = 1;
+      const line = [segs[s][0], segs[s][1]];
+      for (let end = 0; end < 2; end++) {     // grow forward, then backward
+        for (;;) {
+          const tip = end ? line[0] : line[line.length - 1];
+          const i = next(tip); if (i < 0) break;
+          used[i] = 1;
+          const [p, q] = segs[i], far = key(p) === key(tip) ? q : p;
+          end ? line.unshift(far) : line.push(far);
+        }
+      }
+      d += 'M' + f(line[0][0]) + ' ' + f(line[0][1]);
+      for (let i = 1; i < line.length; i++) d += 'L' + f(line[i][0]) + ' ' + f(line[i][1]);
+    }
+    return d;
+  };
+
+  const out = toPath(visibleRuns(outline)), det = toPath(visibleRuns(detail));
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">\n`
+    + '<g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">\n'
+    + `<g id="detail" stroke-width="0.6"><path d="${det}"/></g>\n`
+    + `<g id="outline" stroke-width="1.4"><path d="${out}"/></g>\n`
+    + '</g>\n</svg>\n';
 }
 function saveSTL() {
   const stl = new Uint8Array(new STLExporter().parse(assembly, {binary:true}).buffer);
