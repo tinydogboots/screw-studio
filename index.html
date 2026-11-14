@@ -130,7 +130,7 @@
         <button type="button" id="reset">Reset</button>
       </div>
       <div class="frow"><span>Output format</span>
-        <span class="fmt"><button type="button" data-fmt="jpg" aria-pressed="true">JPG</button><button type="button" data-fmt="svg" aria-pressed="false">SVG</button></span></div>
+        <span class="fmt"><button type="button" data-fmt="png" aria-pressed="true">PNG</button><button type="button" data-fmt="svg" aria-pressed="false">SVG</button></span></div>
       <button type="button" class="exportbtn" id="export"><span>Export</span><kbd>cmd + S</kbd></button>
       <div id="status" role="status"></div>
     </footer>
@@ -981,26 +981,39 @@ function ditherFrame() {
   bmDirty = false;
   const w = stageW, h = stageH;
   if (bmCanvas.width !== w || bmCanvas.height !== h) { bmCanvas.width = w; bmCanvas.height = h; }
+  bmCtx.clearRect(0, 0, w, h);   // start empty so the transparent background reads as "outside the screw"
   bmCtx.drawImage(renderer.domElement, 0, 0, w, h);
   const img = bmCtx.getImageData(0, 0, w, h), d = img.data;
   const g = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  // only the screw is dithered: pixels outside it stay the plain stage colour and never receive error
+  const inside = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    inside[i] = d[i * 4 + 3] >= 128 ? 1 : 0;
+    g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  }
   const K = KERNELS[state.bmMethod] || KERNELS.jjn;
   const factor = {jjn: state.bmJJN, stucki: state.bmStucki, atkinson: state.bmAtkinson}[state.bmMethod] ?? K.max;
   const amt = factor / K.max, thr = state.bmThreshold / 100 * 255;
   const taps = K.k.map(([dx, dy, wgt]) => [dx, dy, wgt / K.div * amt]);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const i = y * w + x, v = g[i], out = v < thr ? 0 : 255, err = v - out;
+      const i = y * w + x;
+      if (!inside[i]) continue;
+      const v = g[i], out = v < thr ? 0 : 255, err = v - out;
       g[i] = out;
       if (err === 0 || amt === 0) continue;
       for (const [dx, dy, f] of taps) {
         const xx = x + dx, yy = y + dy;
-        if (xx >= 0 && xx < w && yy < h) g[yy * w + xx] += err * f;
+        if (xx >= 0 && xx < w && yy < h && inside[yy * w + xx]) g[yy * w + xx] += err * f;
       }
     }
   }
-  for (let i = 0; i < w * h; i++) { const v = g[i]; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+  const hex = parseInt(state.bg.slice(1), 16), br = hex >> 16 & 255, bgG = hex >> 8 & 255, bb = hex & 255;   // stage colour, as shown
+  for (let i = 0; i < w * h; i++) {
+    if (inside[i]) { const v = g[i]; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; }
+    else { d[i * 4] = br; d[i * 4 + 1] = bgG; d[i * 4 + 2] = bb; }
+    d[i * 4 + 3] = 255;
+  }
   bmCtx.putImageData(img, 0, 0);
 }
 
@@ -1014,8 +1027,14 @@ function renderFrame() {
       key.position.copy(controls.target).addScaledVector(_lightDir, 100);
       key.target.position.copy(controls.target); key.target.updateMatrixWorld();
     }
-    renderer.render(scene, camera);
-    if (state.style === 'bitmap') ditherFrame();
+    if (state.style === 'bitmap') {
+      // render the screw alone on a transparent background: its alpha is the mask for the dithering
+      const bg = scene.background, ca = renderer.getClearAlpha(); renderer.getClearColor(_clear);
+      scene.background = null; renderer.setClearColor(0x000000, 0);
+      renderer.render(scene, camera);
+      renderer.setClearColor(_clear, ca); scene.background = bg;
+      ditherFrame();
+    } else renderer.render(scene, camera);
     return;
   }
   // light rides with the camera (upper left, toward the viewer) so the shading reads the same from every angle
@@ -1306,10 +1325,10 @@ const fileBase = () => {
   const s = state, size = (s.profile === 'metric' ? 'M' : 'D') + s.d;
   return s.showScrew ? `screw-${size}x${s.length}-${s.head}${s.showNut ? '-with-nut' : ''}` : `nut-${size}-${s.nutEdges}sided`;
 };
-let exportFmt = 'jpg';
-// Outline exports JPG or SVG; Rendering exports JPG only
+let exportFmt = 'png';
+// Outline exports PNG or SVG; Rendering and Bitmap export PNG
 const syncExport = () => {
-  if (state.style !== 'outline') exportFmt = 'jpg';
+  if (state.style !== 'outline') exportFmt = 'png';
   for (const b of document.querySelectorAll('.fmt button')) {
     b.hidden = b.dataset.fmt === 'svg' && state.style !== 'outline';
     b.setAttribute('aria-pressed', String(b.dataset.fmt === exportFmt));
@@ -1318,18 +1337,18 @@ const syncExport = () => {
 for (const b of document.querySelectorAll('.fmt button')) b.onclick = () => { exportFmt = b.dataset.fmt; syncExport(); };
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 document.querySelector('#export kbd').textContent = isMac ? 'cmd + S' : 'ctrl + S';
-const doExport = () => ({jpg: saveJPG, svg: saveSVG})[exportFmt]();
+const doExport = () => ({png: savePNG, svg: saveSVG})[exportFmt]();
 document.getElementById('export').onclick = doExport;
 addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); doExport(); }
 });
 syncExport();
 
-function saveJPG() {
+function savePNG() {
   renderFrame();
-  const name = fileBase() + '-' + state.style + '.jpg';
-  if (state.style === 'bitmap') { bmDirty = true; renderFrame(); bmCanvas.toBlob(b => offerFile(name, b), 'image/jpeg', 0.97); return; }
-  renderer.domElement.toBlob(b => offerFile(name, b), 'image/jpeg', 0.95);
+  const name = fileBase() + '-' + state.style + '.png';
+  if (state.style === 'bitmap') { bmDirty = true; renderFrame(); bmCanvas.toBlob(b => offerFile(name, b), 'image/png'); return; }
+  renderer.domElement.toBlob(b => offerFile(name, b), 'image/png');
 }
 /* Vector export as pure linework (hidden-line drawing of the current view):
    - outline: silhouette edges and open mesh borders (rims, tips), heavier stroke
