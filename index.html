@@ -86,6 +86,7 @@
   /* ---- canvas ---- */
   main{position:relative;min-width:0;min-height:0;background:var(--stage);color:var(--stage-ink)}
   main canvas{display:block;width:100%;height:100%}
+  #bitmap{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated}
   #label{position:absolute;left:22px;top:20px;pointer-events:none;max-width:calc(100% - 44px);font-family:var(--grot)}
   #label .kicker{display:block;font-weight:300;font-style:normal;font-size:21px;line-height:1;letter-spacing:-.035em}
   #label .big{display:block;font-weight:300;font-size:52px;line-height:.86;letter-spacing:-.055em;margin:.1em 0 0 -.03em;white-space:nowrap}
@@ -136,6 +137,7 @@
   </aside>
   <main>
     <div id="loading">Loading 3D engine…</div>
+    <canvas id="bitmap" hidden></canvas>
     <div id="label"></div>
     <div id="hint">Drag orbit · right-drag pan · scroll zoom</div>
   </main>
@@ -172,6 +174,7 @@ const FINISHES = {
 };
 const DEFAULTS = {
   style:'outline', showScrew:true, showNut:false,
+  bmThreshold:50, bmMethod:'jjn', bmJJN:24, bmStucki:26, bmAtkinson:26,
   head:'pan', headScale:1, drive:'phillips', flange:false,
   engScale:70, engDepth:0.6, engRot:0, engInvert:false,
   d:6, length:30, threadLen:100, tip:'chamfer', pointLen:1.3,
@@ -200,9 +203,15 @@ const PRESETS = {
 const mm = v => (+v).toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '');
 const SCHEMA = [
   {section:'Generate'},
-  {key:'style', label:'Style', type:'select', options:[['outline','Outline'],['render','Rendering']]},
+  {key:'style', label:'Style', type:'select', options:[['outline','Outline'],['render','Rendering'],['bitmap','Bitmap']]},
   {key:'showScrew', label:'Screw', type:'check'},
   {key:'showNut', label:'Nut', type:'check'},
+  {section:'Bitmap', group:'bitmap'},
+  {key:'bmThreshold', label:'Threshold', type:'range', min:0, max:100, step:1, unit:''},
+  {key:'bmMethod', label:'Dithering', type:'select', options:[['jjn','Jarvis-Judice-Ninke'],['stucki','Stucki'],['atkinson','Atkinson']]},
+  {key:'bmJJN', label:'JJN factor', type:'range', min:0, max:30, step:1, unit:''},
+  {key:'bmStucki', label:'Stucki factor', type:'range', min:0, max:33, step:1, unit:''},
+  {key:'bmAtkinson', label:'Atkinson factor', type:'range', min:0, max:33, step:1, unit:''},
   {section:'Head', group:'screw'},
   {key:'head', label:'Style', type:'select', options:HEADS},
   {key:'headScale', label:'Head size', type:'range', min:0.6, max:1.6, step:0.05, unit:'×'},
@@ -401,6 +410,10 @@ function syncUI() {
   off('focal', state.projection === 'isometric');
   for (const g of groups.screw) g.hidden = !state.showScrew;
   for (const g of groups.nut) g.hidden = !state.showNut;
+  for (const g of groups.bitmap) g.hidden = state.style !== 'bitmap';
+  inputs.bmJJN.row.hidden = state.bmMethod !== 'jjn';
+  inputs.bmStucki.row.hidden = state.bmMethod !== 'stucki';
+  inputs.bmAtkinson.row.hidden = state.bmMethod !== 'atkinson';
   // diameter lives in the Shank group; move it into the Nut group in nut-only mode
   moveDiameter(!state.showScrew);
 }
@@ -946,9 +959,53 @@ edgeMat.uniforms.uWide = {value: 2};
 const edgeScene = new THREE.Scene(), edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 { const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), edgeMat); q.frustumCulled = false; edgeScene.add(q); }
 const _clear = new THREE.Color();
+/* ================= bitmap style =================
+   The Rendering frame, turned to 1-bit black and white: grayscale -> threshold -> error diffusion.
+   Each method spreads the rounding error of a pixel to its unprocessed neighbours with its own
+   weights; the factor slider scales how much of that error is passed on (0 = plain threshold). */
+const bmCanvas = document.getElementById('bitmap');
+const bmCtx = bmCanvas.getContext('2d', {willReadFrequently: true});
+let bmDirty = true;
+const KERNELS = {   // [dx, dy, weight], divisor, slider max
+  jjn:      {div: 48, max: 30, k: [[1,0,7],[2,0,5],[-2,1,3],[-1,1,5],[0,1,7],[1,1,5],[2,1,3],[-2,2,1],[-1,2,3],[0,2,5],[1,2,3],[2,2,1]]},
+  stucki:   {div: 42, max: 33, k: [[1,0,8],[2,0,4],[-2,1,2],[-1,1,4],[0,1,8],[1,1,4],[2,1,2],[-2,2,1],[-1,2,2],[0,2,4],[1,2,2],[2,2,1]]},
+  atkinson: {div: 8,  max: 33, k: [[1,0,1],[2,0,1],[-1,1,1],[0,1,1],[1,1,1],[0,2,1]]},
+};
+function ditherFrame() {
+  if (!bmDirty) return;
+  bmDirty = false;
+  const w = stageW, h = stageH;
+  if (bmCanvas.width !== w || bmCanvas.height !== h) { bmCanvas.width = w; bmCanvas.height = h; }
+  bmCtx.drawImage(renderer.domElement, 0, 0, w, h);
+  const img = bmCtx.getImageData(0, 0, w, h), d = img.data;
+  const g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  const K = KERNELS[state.bmMethod] || KERNELS.jjn;
+  const factor = {jjn: state.bmJJN, stucki: state.bmStucki, atkinson: state.bmAtkinson}[state.bmMethod] ?? K.max;
+  const amt = factor / K.max, thr = state.bmThreshold / 100 * 255;
+  const taps = K.k.map(([dx, dy, wgt]) => [dx, dy, wgt / K.div * amt]);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, v = g[i], out = v < thr ? 0 : 255, err = v - out;
+      g[i] = out;
+      if (err === 0 || amt === 0) continue;
+      for (const [dx, dy, f] of taps) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && xx < w && yy < h) g[yy * w + xx] += err * f;
+      }
+    }
+  }
+  for (let i = 0; i < w * h; i++) { const v = g[i]; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+  bmCtx.putImageData(img, 0, 0);
+}
+
 const _lightDir = new THREE.Vector3();
 function renderFrame() {
-  if (state.style === 'render') { renderer.render(scene, camera); return; }   // photographic: one pass, no lines
+  if (state.style !== 'outline') {   // photographic: one pass, no lines; bitmap dithers that result
+    renderer.render(scene, camera);
+    if (state.style === 'bitmap') ditherFrame();
+    return;
+  }
   // light rides with the camera (upper left, toward the viewer) so the shading reads the same from every angle
   _lightDir.set(-0.75, 0.7, 0.45).normalize().applyQuaternion(camera.quaternion);
   key.position.copy(controls.target).addScaledVector(_lightDir, 100);
@@ -977,7 +1034,8 @@ function applyMaterial() {
   material.color.set('#ffffff');                 // white body
   edgeMat.uniforms.uColor.value.set('#000000');  // black outline
   lineMat.color.set('#000000');
-  const render = state.style === 'render';
+  const render = state.style !== 'outline';
+  bmCanvas.hidden = state.style !== 'bitmap'; bmDirty = true;
   for (const m of assembly.children) if (m.isMesh && !m.isLineSegments2) { m.material = render ? renderMat : material; m.castShadow = render; }
   if (featureLines) featureLines.visible = !render;
   if (renderer.shadowMap.enabled !== render) { renderer.shadowMap.enabled = render; renderMat.needsUpdate = true; floor.material.needsUpdate = true; }
@@ -1112,6 +1170,7 @@ function syncAnglesFromView() {
   }
 }
 controls.addEventListener('change', syncAnglesFromView);
+controls.addEventListener('change', () => { bmDirty = true; });
 
 // React to the Camera controls. Returns true when it already re-framed the view.
 let camApplied = '';
@@ -1172,6 +1231,7 @@ function resize() {
   lineMat.resolution.set(stageW, stageH);
   // on wide stages, both cameras nudge the object right so the big caption on the left has room
   updatePersp(); updateOrtho();
+  bmDirty = true;
 }
 new ResizeObserver(resize).observe(main);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -1223,9 +1283,9 @@ const fileBase = () => {
 let exportFmt = 'jpg';
 // Outline exports JPG or SVG; Rendering exports JPG only
 const syncExport = () => {
-  if (state.style === 'render') exportFmt = 'jpg';
+  if (state.style !== 'outline') exportFmt = 'jpg';
   for (const b of document.querySelectorAll('.fmt button')) {
-    b.hidden = b.dataset.fmt === 'svg' && state.style === 'render';
+    b.hidden = b.dataset.fmt === 'svg' && state.style !== 'outline';
     b.setAttribute('aria-pressed', String(b.dataset.fmt === exportFmt));
   }
 };
@@ -1241,7 +1301,9 @@ syncExport();
 
 function saveJPG() {
   renderFrame();
-  renderer.domElement.toBlob(b => offerFile(fileBase() + (state.style === 'render' ? '-render' : '-outline') + '.jpg', b), 'image/jpeg', 0.95);
+  const name = fileBase() + '-' + state.style + '.jpg';
+  if (state.style === 'bitmap') { bmDirty = true; renderFrame(); bmCanvas.toBlob(b => offerFile(name, b), 'image/jpeg', 0.97); return; }
+  renderer.domElement.toBlob(b => offerFile(name, b), 'image/jpeg', 0.95);
 }
 /* Vector export as pure linework (hidden-line drawing of the current view):
    - outline: silhouette edges and open mesh borders (rims, tips), heavier stroke
