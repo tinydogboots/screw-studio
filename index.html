@@ -35,7 +35,9 @@
   .grp h3{display:flex;align-items:baseline;gap:6px;margin:0;font:300 21px/1 var(--grot);letter-spacing:-.035em;padding:0 8px;position:relative}
   .grp h3::after{content:"";flex:1;border-top:1px dotted var(--rule);order:1;margin:0 2px;align-self:center}
   .grp h3 span{background:var(--paper);order:0}
-  .grp h3 .fold{order:2;width:14px;text-align:center;font:12px var(--mono);font-style:normal;letter-spacing:0}
+  .grp h3 .fold{order:3;width:14px;text-align:center;font:12px var(--mono);font-style:normal;letter-spacing:0}
+  .grp h3 .reset{order:2;width:16px;text-align:center;font:13px var(--mono);letter-spacing:0;color:var(--muted)}
+  .grp h3 .reset:hover{color:var(--ink-strong)}
   .row label,.check,.tools button,.frow > span:first-child,.exportbtn > span{font-family:var(--grot);font-size:11.5px;letter-spacing:.02em}
   .grp-body{background:var(--well);padding:2px 8px 6px;margin-top:6px}
   .grp.closed .grp-body{display:none}
@@ -147,7 +149,7 @@
 // Full CDN URLs, no import map: the hosted viewer can load scripts before an import map,
 // which makes the browser ignore it. These ESM builds all share one copy of three.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/+esm';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js/+esm';
+import { TrackballControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/TrackballControls.js/+esm';
 import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/environments/RoomEnvironment.js/+esm';
 import { STLExporter } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/STLExporter.js/+esm';
 import { LineSegments2 } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/lines/LineSegments2.js/+esm';
@@ -238,7 +240,7 @@ const SCHEMA = [
   {key:'projection', label:'View', type:'select', options:[['perspective','Perspective'],['isometric','Isometric']]},
   {key:'focal', label:'Focal length', type:'range', min:4, max:400, step:1, unit:'mm', log:true},
   // the camera turns around the screw: tilt over (X), around the vertical (Y), and around the view (Z)
-  {key:'camEl', label:'Rotate (X)', type:'range', min:-89, max:89, step:1, unit:'°', live:true},
+  {key:'camEl', label:'Rotate (X)', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
   {key:'camAz', label:'Rotate (Y)', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
   {key:'camRoll', label:'Rotate (Z)', type:'range', min:-180, max:180, step:1, unit:'°', live:true},
 ];
@@ -256,7 +258,7 @@ const inputs = {}, groups = {};
 const ctl = document.getElementById('controls');
 const mark = on => on ? '[*] ' : '[ ] ';
 let activePreset = '';
-let groupBody = ctl;
+let groupBody = ctl, sectionKeys = [];
 const touched = () => { activePreset = ''; };
 for (const s of SCHEMA) {
   if (s.section) {
@@ -267,7 +269,12 @@ for (const s of SCHEMA) {
     fold.setAttribute('aria-label', 'Collapse ' + s.section); fold.setAttribute('aria-expanded', 'true');
     fold.onclick = () => { const c = sec.classList.toggle('closed'); fold.textContent = c ? '+' : '-';
       fold.setAttribute('aria-expanded', String(!c)); fold.setAttribute('aria-label', (c ? 'Expand ' : 'Collapse ') + s.section); };
-    h.append(t, fold);
+    // ↺ puts just this section back to its default values
+    const keys = []; sectionKeys = keys;
+    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'reset'; reset.textContent = '↺';
+    reset.title = 'Reset ' + s.section; reset.setAttribute('aria-label', 'Reset ' + s.section + ' to default values');
+    reset.onclick = () => resetSection(keys);
+    h.append(t, reset, fold);
     groupBody = document.createElement('div'); groupBody.className = 'grp-body';
     sec.append(h, groupBody); ctl.appendChild(sec);
     if (s.group) groups[s.group] = (groups[s.group] || []).concat(sec);
@@ -349,11 +356,21 @@ for (const s of SCHEMA) {
   }
   groupBody.appendChild(row);
   inputs[s.key] = {el, s, row, num};
+  if (s.key in DEFAULTS) sectionKeys.push(s.key);
 }
 
 // native dropdown lists ignore CSS text-transform on some systems, so uppercase option text directly
 for (const o of document.querySelectorAll('option')) o.text = o.text.toUpperCase();
 
+function resetSection(keys) {
+  for (const k of keys) state[k] = DEFAULTS[k];
+  if (keys.includes('kind')) { state.showScrew = DEFAULTS.showScrew; state.showNut = DEFAULTS.showNut; }
+  if (keys.includes('profile')) state.pitch = DEFAULTS.pitch;
+  touched(); syncUI();
+  if (keys.every(k => k.startsWith('bm'))) { quickUpdate(); return; }   // bitmap look only
+  rebuild();
+  if (keys.includes('camAz')) { fitView(); applyOrbit(); }                // camera back to its start view
+}
 function syncUI() {
   state.kind = state.showScrew && state.showNut ? 'both' : state.showNut ? 'nut' : 'screw';
   for (const k in inputs) {
@@ -841,8 +858,10 @@ let camera = perspCam;
 let orthoHalf = 10, stageW = 1, stageH = 1;
 const ISO_DIR = new THREE.Vector3(1, 1, 1).normalize();          // true isometric: 45° around, 35.26° down
 const PERSP_DIR = new THREE.Vector3(1.1, 0.5, 1.4).normalize();
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true; controls.autoRotateSpeed = 1.6;
+// Trackball: free tumbling in every direction, no poles, no 'upright' lock
+const controls = new TrackballControls(camera, renderer.domElement);
+controls.rotateSpeed = 3; controls.zoomSpeed = 1.2; controls.panSpeed = 0.8;
+controls.staticMoving = false; controls.dynamicDampingFactor = 0.18;
 const key = new THREE.DirectionalLight(0xffffff, Math.PI * 0.95);   // toon shading: white faces land at full white
 key.castShadow = false;
 key.shadow.mapSize.set(1024, 1024); key.shadow.bias = -0.0005; key.shadow.radius = 18; key.shadow.blurSamples = 25;
@@ -1110,7 +1129,6 @@ function rebuild() {
   sc.updateProjectionMatrix();
 
   scene.background = new THREE.Color(state.bg);
-  controls.autoRotate = state.autoRotate;
   const camChanged = applyCamera();
   if (!camChanged) {
     if (!lastRadius || Math.abs(r - lastRadius) / lastRadius > 0.3) fitView();
@@ -1142,6 +1160,7 @@ function fitView() {
   const r = sph.radius;
   lastRadius = r;
   controls.target.copy(sph.center);
+  camera.up.set(0, 1, 0);
   if (camera === orthoCam) {
     orthoHalf = r * 1.15; orthoCam.zoom = 1;
     orthoCam.position.copy(sph.center).addScaledVector(ISO_DIR, r * 8);
@@ -1153,27 +1172,32 @@ function fitView() {
     perspCam.position.copy(sph.center).addScaledVector(PERSP_DIR, dist);
     setPerspClip(dist); perspCam.updateProjectionMatrix();
   }
+  camera.lookAt(controls.target);
   controls.update();
 }
 
-/* Camera angles. Orbit = turn around the object, Elevation = look from above/below, Roll = tilt the frame.
-   Dragging the view updates the Orbit and Elevation sliders; the sliders move the camera. */
+/* Camera angles as one free rotation around the screw (Y, then X, then Z):
+   Rotate (Y) turns around the vertical, Rotate (X) tips over the top or under, Rotate (Z) spins the view.
+   All three go the full circle; dragging updates them, and they move the camera. */
+const _euler = new THREE.Euler(0, 0, 0, 'YXZ'), _q = new THREE.Quaternion();
 function applyOrbit() {
   const dist = camera.position.distanceTo(controls.target) || 1;
-  const az = THREE.MathUtils.degToRad(state.camAz), el = THREE.MathUtils.degToRad(state.camEl);
-  camera.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el))
-    .multiplyScalar(dist).add(controls.target);
+  _euler.set(THREE.MathUtils.degToRad(-state.camEl), THREE.MathUtils.degToRad(state.camAz), THREE.MathUtils.degToRad(state.camRoll), 'YXZ');
+  _q.setFromEuler(_euler);
+  camera.quaternion.copy(_q);
+  camera.position.set(0, 0, dist).applyQuaternion(_q).add(controls.target);
+  camera.up.set(0, 1, 0).applyQuaternion(_q);
   syncingFromSliders = true; controls.update(); syncingFromSliders = false;
+  bmDirty = true;
 }
 let syncingFromSliders = false;
 function syncAnglesFromView() {
   if (syncingFromSliders) return;
-  const v = camera.position.clone().sub(controls.target);
-  const az = Math.round(THREE.MathUtils.radToDeg(Math.atan2(v.x, v.z)));
-  const el = Math.round(THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(v.y / (v.length() || 1), -1, 1))));
-  if (az === state.camAz && el === state.camEl) return;
-  state.camAz = az; state.camEl = el;
-  for (const k of ['camAz', 'camEl']) {
+  _euler.setFromQuaternion(camera.quaternion, 'YXZ');
+  const az = Math.round(THREE.MathUtils.radToDeg(_euler.y)), el = Math.round(THREE.MathUtils.radToDeg(-_euler.x)), roll = Math.round(THREE.MathUtils.radToDeg(_euler.z));
+  if (az === state.camAz && el === state.camEl && roll === state.camRoll) return;
+  state.camAz = az; state.camEl = el; state.camRoll = roll;
+  for (const k of ['camAz', 'camEl', 'camRoll']) {
     const {el: slider, num} = inputs[k];
     slider.value = state[k];
     if (document.activeElement !== num) num.value = state[k];
@@ -1237,14 +1261,13 @@ function resize() {
   lineMat.resolution.set(stageW, stageH);
   // on wide stages, both cameras nudge the object right so the big caption on the left has room
   updatePersp(); updateOrtho();
+  controls.handleResize();
   bmDirty = true;
 }
 new ResizeObserver(resize).observe(main);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 renderer.setAnimationLoop(() => {
-  controls.autoRotate = state.autoRotate && !reduceMotion.matches;
   controls.update();
-  if (state.camRoll) { camera.rotateZ(THREE.MathUtils.degToRad(state.camRoll)); camera.updateMatrixWorld(); }
   renderFrame();
 });
 
