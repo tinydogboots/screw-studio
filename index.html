@@ -104,8 +104,11 @@
   // If the 3D engine fails to start, say why on the loading screen instead of waiting forever.
   (function () {
     const show = msg => { const el = document.getElementById('loading'); if (el && !el.dataset.final) el.textContent = msg; };
-    addEventListener('error', e => show('3D engine failed to start: ' + (e.message || 'a script could not load') + '. Reload the page to try again.'), true);
-    addEventListener('unhandledrejection', e => show('3D engine failed to start: ' + (e.reason && e.reason.message || e.reason) + '.'));
+    // only react to this page's own scripts, not errors from browser extensions
+    addEventListener('error', e => {
+      const ours = (e.target && e.target.tagName === 'SCRIPT') || (e.filename && (e.filename.startsWith(location.origin) || e.filename.includes('cdn.jsdelivr.net')));
+      if (ours) show('3D engine failed to start: ' + (e.message || 'a script could not load') + '. Reload the page to try again.');
+    }, true);
     setTimeout(() => show('The 3D engine is taking too long to load. Check your connection and reload the page.'), 15000);
   })();
 </script>
