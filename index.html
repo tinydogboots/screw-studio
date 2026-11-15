@@ -1367,6 +1367,18 @@ syncExport();
 
 /* PNG export: always 4K (3840 × 2160), transparent background, screw centred and framed.
    Keeps the current viewing angle, lens and style; line weights scale with the image. */
+/* Export names: YYMMDD_HHMMSS_SCREWAROUND_### (local time, 3-digit running number shared by
+   PNG and SVG, remembered in this browser). */
+const COUNTER_KEY = 'screw-around-export-count';
+let exportCount = 0;
+try { exportCount = parseInt(localStorage.getItem(COUNTER_KEY) || '0', 10) || 0; } catch {}
+function exportName(ext) {
+  exportCount = exportCount % 999 + 1;
+  try { localStorage.setItem(COUNTER_KEY, String(exportCount)); } catch {}
+  const t = new Date(), p = n => String(n).padStart(2, '0');
+  const stamp = p(t.getFullYear() % 100) + p(t.getMonth() + 1) + p(t.getDate()) + '_' + p(t.getHours()) + p(t.getMinutes()) + p(t.getSeconds());
+  return `${stamp}_SCREWAROUND_${String(exportCount).padStart(3, '0')}.${ext}`;
+}
 function savePNG() {
   const W = 3840, H = 2160;
   say('Rendering 4K PNG…');
@@ -1416,7 +1428,7 @@ function savePNG() {
         // outline: the stage pass painted nothing because the background is off; copy the frame out
         outCanvas.getContext('2d').drawImage(renderer.domElement, 0, 0);
       }
-      outCanvas.toBlob(b => offerFile(fileBase() + '-' + state.style + '-4k.png', b), 'image/png');
+      outCanvas.toBlob(b => offerFile(exportName('png'), b), 'image/png');
     } finally {
       EXPORT = null;
       scene.background = saved.bg; renderer.setClearColor(saved.cc, saved.ca);
@@ -1439,7 +1451,7 @@ function savePNG() {
 function saveSVG() {
   say('Building SVG…');
   setTimeout(() => {
-    try { offerFile(fileBase() + '.svg', new Blob([buildLinework()], {type: 'image/svg+xml'})); }
+    try { offerFile(exportName('svg'), new Blob([buildLinework()], {type: 'image/svg+xml'})); }
     catch (e) { say('Could not build SVG: ' + e.message); }
   }, 30);
 }
