@@ -88,7 +88,22 @@
   /* ---- canvas ---- */
   main{position:relative;min-width:0;min-height:0;background:var(--stage);color:var(--stage-ink)}
   main canvas{display:block;width:100%;height:100%}
-  #bitmap{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated}
+#bitmap{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated}
+/* Compose mode: the stage becomes a poster-shaped frame with the uploaded design behind the screws */
+.modes{display:flex;gap:6px;margin-top:12px}
+.modes button{border:1px dotted var(--ink);border-radius:999px;padding:5px 12px 4px;font:11.5px var(--grot);letter-spacing:.02em}
+.modes button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-style:solid}
+#poster{position:absolute;display:none;background:#fff center/cover no-repeat;box-shadow:0 0 0 1px rgba(0,0,0,.18), 0 10px 30px rgba(0,0,0,.08);pointer-events:none}
+main.compose #poster{display:block}
+main.compose #label{display:none}
+main.compose canvas{touch-action:none}
+.shots{display:flex;flex-direction:column;gap:2px;padding-top:10px}
+.shots button{font:11px/1.35 var(--mono);text-transform:none;text-align:left;padding:3px 4px;border-radius:3px}
+.shots button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;padding-top:10px}
+.acts button{border:1px dotted var(--ink);border-radius:999px;padding:4px 10px 3px;font:11px var(--grot);letter-spacing:.02em}
+.acts button:hover{background:var(--ink);color:var(--paper);border-style:solid}
+.subhead{padding-top:14px;font:300 15px var(--grot);letter-spacing:-.02em}
   #label{position:absolute;left:22px;top:20px;pointer-events:none;max-width:calc(100% - 44px);font-family:var(--grot)}
   #label .kicker{display:block;font-weight:300;font-style:normal;font-size:21px;line-height:1;letter-spacing:-.035em}
   #label .big{display:block;font-weight:300;font-size:52px;line-height:.86;letter-spacing:-.055em;margin:.1em 0 0 -.03em;white-space:nowrap}
@@ -127,6 +142,7 @@
       <header class="brand">
         <span class="brand-big">Screw</span>
         <span class="brand-big">Around</span>
+        <div class="modes" role="group" aria-label="Mode"><button type="button" data-mode="design" aria-pressed="true">Design</button><button type="button" data-mode="compose" aria-pressed="false">Compose</button></div>
       </header>
     </div>
     <footer>
@@ -143,6 +159,7 @@
   </aside>
   <main>
     <div id="loading">Loading 3D engine…</div>
+    <div id="poster"></div>
     <canvas id="bitmap" hidden></canvas>
     <div id="label"></div>
     <div id="hint">Drag orbit · right-drag pan · scroll zoom</div>
@@ -257,6 +274,26 @@ try { const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
   // turntable always starts off; it only spins when switched on in this visit
   if (saved) for (const k in DEFAULTS) if (!['autoRotate', 'grid', 'bg', 'rotX', 'rotY', 'rotZ'].includes(k) && k in saved && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k]; } catch {}
 if (!state.showScrew && !state.showNut) state.showScrew = true;
+
+/* ---- Compose mode state ---- */
+const FORMATS = {
+  poster: {label: 'Poster 24 × 36', w: 24, h: 36},
+  banner: {label: 'Banner 24 × 20', w: 24, h: 20},
+  story:  {label: 'Social 9:16',    w: 9,  h: 16},
+  feed:   {label: 'Social 4:5',     w: 4,  h: 5},
+};
+const FRAME_H = 100;                       // frame height in scene units; width follows the format
+const COMPOSE_KEY = 'screw-around-compose';
+const C = {on: false, format: 'poster', bg: null, bgName: '', sel: 0,
+           screws: [{x: 0.5, y: 0.5, size: 45, rx: 0, ry: 0, rz: 0}]};
+try { Object.assign(C, JSON.parse(localStorage.getItem(COMPOSE_KEY) || '{}')); } catch {}
+if (!FORMATS[C.format]) C.format = 'poster';
+if (!Array.isArray(C.screws) || !C.screws.length) C.screws = [{x: 0.5, y: 0.5, size: 45, rx: 0, ry: 0, rz: 0}];
+C.sel = Math.min(Math.max(0, C.sel | 0), C.screws.length - 1);
+const composeGroup = new THREE.Group();
+const composeCam = new THREE.PerspectiveCamera(35, 1, 0.1, 5000);
+const composeOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
+const setLinesVisible = v => scene.traverse(o => { if (o.isLineSegments2) o.visible = v; });
 
 /* ================= UI ================= */
 const inputs = {}, groups = {};
@@ -402,6 +439,7 @@ function syncUI() {
   off('pointLen', state.tip !== 'point');
   off('nutPos', !state.showScrew);
   off('focal', state.projection === 'isometric');
+  for (const k of ['camEl', 'camAz', 'camRoll']) inputs[k].row.hidden = C.on;   // compose uses a fixed front camera
   for (const g of groups.screw) g.hidden = !state.showScrew;
   for (const g of groups.nut) g.hidden = !state.showNut;
   for (const g of groups.bitmap) g.hidden = state.style !== 'bitmap';
@@ -1033,7 +1071,7 @@ function ditherFrame() {
   for (let i = 0; i < w * h; i++) {
     if (inside[i]) { const v = g[i]; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; }
     else { d[i * 4] = br; d[i * 4 + 1] = bgG; d[i * 4 + 2] = bb; }
-    d[i * 4 + 3] = inside[i] || !EXPORT ? 255 : 0;   // exported PNGs keep the background transparent
+    d[i * 4 + 3] = inside[i] || !(EXPORT || C.on) ? 255 : 0;   // exported PNGs keep the background transparent
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -1066,13 +1104,14 @@ function renderFrame() {
   const bg = scene.background, gv = grid.visible, ca = renderer.getClearAlpha();
   renderer.getClearColor(_clear);
   scene.background = null; grid.visible = false; scene.overrideMaterial = nrmMat;
-  if (featureLines) featureLines.visible = false;
+  setLinesVisible(false);
   renderer.setRenderTarget(nrmRT); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(scene, camera);
   renderer.setRenderTarget(null); renderer.setClearColor(_clear, ca);
   scene.overrideMaterial = null; scene.background = bg; grid.visible = gv;
-  if (featureLines) featureLines.visible = true;
+  setLinesVisible(true);
   // 2. stage + grid, 3. stage-coloured screw on top (hides the grid behind it), 4. edges on top
-  assembly.visible = false; renderer.render(scene, camera); assembly.visible = true;
+  const subject = C.on ? composeGroup : assembly;
+  subject.visible = false; renderer.render(scene, camera); subject.visible = true;
   renderer.autoClear = false;
   renderer.clearDepth();
   scene.background = null; grid.visible = false;
@@ -1124,6 +1163,7 @@ function buildParts(p, T) {
 
 let lastRadius = 0;
 function rebuild() {
+  if (C.on) camera = state.projection === 'isometric' ? orthoCam : perspCam;   // geometry framing uses the design camera
   assembly.traverse(o => o.geometry && o.geometry.dispose());
   assembly.clear();
   const T = threadModel(state);
@@ -1173,6 +1213,7 @@ function rebuild() {
   }
   updateLabel(T);
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+  if (C.on) { scene.background = null; useComposeCamera(); rebuildCompose(); }
 }
 
 // distance at which the object's bounding sphere fills the frame for the current lens
@@ -1289,7 +1330,16 @@ function updateLabel(T) {
 let pending = false;
 function schedule() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; rebuild(); }); }
 function resize() {
-  stageW = Math.max(1, main.clientWidth); stageH = Math.max(1, main.clientHeight);
+  let w = main.clientWidth, h = main.clientHeight, left = 0, top = 0;
+  if (C.on) {   // fit the format's frame inside the stage, with a margin
+    const f = FORMATS[C.format], a = f.w / f.h, pad = Math.min(36, w * 0.05), aw = w - pad * 2, ah = h - pad * 2;
+    const fw = Math.min(aw, ah * a), fh = fw / a;
+    left = (w - fw) / 2; top = (h - fh) / 2; w = fw; h = fh;
+  }
+  stageW = Math.max(1, Math.round(w)); stageH = Math.max(1, Math.round(h));
+  for (const el of [renderer.domElement, bmCanvas, posterEl]) Object.assign(el.style, C.on
+    ? {position: 'absolute', left: Math.round(left) + 'px', top: Math.round(top) + 'px', width: stageW + 'px', height: stageH + 'px'}
+    : {position: '', left: '', top: '', width: '', height: ''});
   renderer.setSize(stageW, stageH, false);
   const db = renderer.getDrawingBufferSize(new THREE.Vector2());
   nrmRT.setSize(db.x, db.y);
@@ -1299,6 +1349,7 @@ function resize() {
   // on wide stages, both cameras nudge the object right so the big caption on the left has room
   updatePersp(); updateOrtho();
   controls.handleResize();
+  if (C.on) useComposeCamera();
   bmDirty = true;
 }
 new ResizeObserver(resize).observe(main);
@@ -1307,6 +1358,241 @@ renderer.setAnimationLoop(() => {
   controls.update();
   renderFrame();
 });
+
+/* ================= compose mode =================
+   A small poster workshop: pick a format, put your design behind the frame, then place
+   copies of the current screw on it and tilt each one until the layout works. */
+const posterEl = document.getElementById('poster');
+main.insertBefore(posterEl, renderer.domElement);
+scene.add(composeGroup);
+let posterImg = null;
+function saveCompose() { try { localStorage.setItem(COMPOSE_KEY, JSON.stringify(C)); } catch { try { const {bg, ...rest} = C; localStorage.setItem(COMPOSE_KEY, JSON.stringify(rest)); } catch {} } }
+function setPoster(src) {
+  posterEl.style.backgroundImage = src ? `url("${src}")` : 'none';
+  posterImg = null;
+  if (src) { const im = new Image(); im.onload = () => posterImg = im; im.src = src; }
+}
+const frameW = () => FRAME_H * FORMATS[C.format].w / FORMATS[C.format].h;
+
+function useComposeCamera() {
+  const f = FORMATS[C.format], a = f.w / f.h, fh = FRAME_H, fw = fh * a;
+  if (state.projection === 'isometric') {
+    Object.assign(composeOrtho, {left: -fw / 2, right: fw / 2, top: fh / 2, bottom: -fh / 2, near: 1, far: 4000, zoom: 1});
+    composeOrtho.position.set(0, 0, 1000); composeOrtho.up.set(0, 1, 0); composeOrtho.lookAt(0, 0, 0);
+    camera = composeOrtho;
+  } else {
+    composeCam.aspect = a; composeCam.setFocalLength(state.focal);
+    const d = (fh / 2) / Math.tan(THREE.MathUtils.degToRad(composeCam.fov) / 2);
+    composeCam.position.set(0, 0, d); composeCam.up.set(0, 1, 0); composeCam.lookAt(0, 0, 0);
+    composeCam.near = Math.max(0.05, d / 200); composeCam.far = d * 20;
+    camera = composeCam;
+  }
+  camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+  bmDirty = true;
+}
+
+function placeScrew(holder, sc) {
+  const len = holder.userData.len || 1;
+  holder.scale.setScalar(sc.size / 100 * FRAME_H / len);
+  holder.position.set((sc.x - 0.5) * frameW(), (0.5 - sc.y) * FRAME_H, 0);
+  holder.rotation.set(THREE.MathUtils.degToRad(sc.rx), THREE.MathUtils.degToRad(sc.ry), THREE.MathUtils.degToRad(sc.rz), 'YXZ');
+}
+function rebuildCompose() {
+  composeGroup.clear();
+  if (!C.on) return;
+  assembly.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  assembly.traverse(o => { if (o.isMesh && !o.isLineSegments2) box.expandByObject(o); });
+  const center = box.getCenter(new THREE.Vector3()), len = Math.max(1e-3, box.max.y - box.min.y);
+  C.screws.forEach((sc, i) => {
+    const holder = new THREE.Group(), inner = assembly.clone(true);
+    inner.visible = true; inner.position.copy(center).negate();   // pivot around the screw's middle
+    holder.add(inner); holder.userData = {index: i, len};
+    placeScrew(holder, sc);
+    composeGroup.add(holder);
+  });
+  bmDirty = true;
+}
+function updateScrew(i) {
+  const h = composeGroup.children[i]; if (h) placeScrew(h, C.screws[i]);
+  bmDirty = true; refreshShotList(); saveCompose();
+}
+
+/* ---- dragging screws on the poster ---- */
+const _ray = new THREE.Raycaster(), _ndc = new THREE.Vector2(), _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), _hit = new THREE.Vector3();
+let dragging = null;
+function pointerNdc(e) { const r = renderer.domElement.getBoundingClientRect(); _ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); }
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (!C.on) return;
+  pointerNdc(e); _ray.setFromCamera(_ndc, camera);
+  const meshes = []; composeGroup.traverse(o => { if (o.isMesh && !o.isLineSegments2) meshes.push(o); });
+  const hit = _ray.intersectObjects(meshes, false)[0];
+  if (!hit) return;
+  let o = hit.object; while (o.parent && o.parent !== composeGroup) o = o.parent;
+  C.sel = o.userData.index;
+  _ray.ray.intersectPlane(_plane, _hit);
+  dragging = {id: e.pointerId, dx: o.position.x - _hit.x, dy: o.position.y - _hit.y};
+  renderer.domElement.setPointerCapture(e.pointerId);
+  renderComposePanel();
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!dragging || e.pointerId !== dragging.id) return;
+  pointerNdc(e); _ray.setFromCamera(_ndc, camera);
+  if (!_ray.ray.intersectPlane(_plane, _hit)) return;
+  const sc = C.screws[C.sel];
+  sc.x = Math.min(1, Math.max(0, (_hit.x + dragging.dx) / frameW() + 0.5));
+  sc.y = Math.min(1, Math.max(0, 0.5 - (_hit.y + dragging.dy) / FRAME_H));
+  updateScrew(C.sel); syncSelectedSliders();
+});
+renderer.domElement.addEventListener('pointerup', () => { dragging = null; });
+
+/* ---- the Compose panel section ---- */
+const compSec = document.createElement('section'); compSec.className = 'grp'; compSec.hidden = true;
+compSec.innerHTML = '<h3><span>Compose</span></h3><div class="grp-body"></div>';
+ctl.insertBefore(compSec, ctl.children[1]);
+const compBody = compSec.querySelector('.grp-body');
+const shotText = (sc, i) => `#${i + 1}  X ${Math.round(sc.rx)}°  Y ${Math.round(sc.ry)}°  Z ${Math.round(sc.rz)}°  ·  ${Math.round(sc.x * 100)}% / ${Math.round(sc.y * 100)}%  ·  size ${Math.round(sc.size)}%`;
+let selSliders = [];
+function rowSlider(label, unit, min, max, step, get, set) {
+  const row = document.createElement('div'); row.className = 'row';
+  const line = document.createElement('div'); line.className = 'line';
+  const lab = document.createElement('label'); lab.textContent = label;
+  const box = document.createElement('span'); box.className = 'num';
+  const num = document.createElement('input'); num.type = 'text'; num.inputMode = 'decimal'; num.setAttribute('aria-label', label);
+  box.appendChild(num); if (unit) { const u = document.createElement('span'); u.className = 'unit'; u.textContent = unit; box.appendChild(u); }
+  line.append(lab, box);
+  const rg = document.createElement('input'); rg.type = 'range'; Object.assign(rg, {min, max, step});
+  const sync = () => { rg.value = get(); if (document.activeElement !== num) num.value = +(+get()).toFixed(1); };
+  rg.addEventListener('input', () => { set(parseFloat(rg.value)); sync(); });
+  num.addEventListener('change', () => { const v = parseFloat(num.value); if (!isNaN(v)) set(Math.min(max, Math.max(min, v))); sync(); });
+  num.addEventListener('keydown', e => { if (e.key === 'Enter') num.blur(); });
+  row.append(line, rg); sync();
+  return {row, sync};
+}
+function syncSelectedSliders() { selSliders.forEach(s => s.sync()); }
+function refreshShotList() {
+  compBody.querySelectorAll('.shots button').forEach((b, i) => { b.textContent = shotText(C.screws[i], i); });
+}
+function renderComposePanel() {
+  compBody.replaceChildren();
+  // format
+  const fr = document.createElement('div'); fr.className = 'row';
+  fr.innerHTML = '<div class="line"><label for="c_format">Format</label></div>';
+  const fsel = document.createElement('select'); fsel.id = 'c_format';
+  for (const [k, f] of Object.entries(FORMATS)) fsel.add(new Option(f.label.toUpperCase(), k));
+  fsel.value = C.format;
+  fsel.addEventListener('input', () => { C.format = fsel.value; saveCompose(); resize(); rebuildCompose(); });
+  fr.firstChild.appendChild(fsel); compBody.appendChild(fr);
+  // background
+  const br = document.createElement('div'); br.className = 'row';
+  const bl = document.createElement('div'); bl.className = 'line';
+  const blab = document.createElement('label'); blab.textContent = 'Background';
+  const bfile = document.createElement('input'); bfile.type = 'file'; bfile.accept = 'image/*'; bfile.hidden = true;
+  const bbtn = document.createElement('button'); bbtn.type = 'button'; bbtn.className = 'filebtn'; bbtn.textContent = C.bgName || 'Choose file';
+  bbtn.onclick = () => bfile.click();
+  bfile.addEventListener('change', () => {
+    const f = bfile.files && bfile.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { C.bg = rd.result; C.bgName = f.name; setPoster(C.bg); saveCompose(); renderComposePanel(); };
+    rd.readAsDataURL(f);
+  });
+  bl.append(blab, bbtn, bfile); br.appendChild(bl); compBody.appendChild(br);
+  // screws: the list is the angle read-out
+  const sh = document.createElement('div'); sh.className = 'subhead'; sh.textContent = 'Screws'; compBody.appendChild(sh);
+  const list = document.createElement('div'); list.className = 'shots';
+  C.screws.forEach((sc, i) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = shotText(sc, i);
+    b.setAttribute('aria-pressed', String(i === C.sel));
+    b.onclick = () => { C.sel = i; saveCompose(); renderComposePanel(); };
+    list.appendChild(b);
+  });
+  compBody.appendChild(list);
+  const acts = document.createElement('div'); acts.className = 'acts';
+  const act = (t, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.onclick = fn; acts.appendChild(b); };
+  act('Add screw', () => { C.screws.push({x: 0.5, y: 0.5, size: 45, rx: 0, ry: 0, rz: 0}); C.sel = C.screws.length - 1; afterListChange(); });
+  act('Duplicate', () => { const s = C.screws[C.sel]; C.screws.push({...s, x: Math.min(1, s.x + 0.06), y: Math.min(1, s.y + 0.04)}); C.sel = C.screws.length - 1; afterListChange(); });
+  if (C.screws.length > 1) act('Delete', () => { C.screws.splice(C.sel, 1); C.sel = Math.max(0, C.sel - 1); afterListChange(); });
+  if (C.bg) act('Remove background', () => { C.bg = null; C.bgName = ''; setPoster(null); saveCompose(); renderComposePanel(); });
+  compBody.appendChild(acts);
+  // selected screw
+  const sel = C.screws[C.sel];
+  const sh2 = document.createElement('div'); sh2.className = 'subhead'; sh2.textContent = `Screw #${C.sel + 1}`; compBody.appendChild(sh2);
+  const mk = (label, unit, min, max, step, key) => rowSlider(label, unit, min, max, step, () => sel[key], v => { sel[key] = v; updateScrew(C.sel); });
+  selSliders = [
+    mk('Size', '%', 5, 150, 1, 'size'),
+    mk('Rotate (X)', '°', -180, 180, 1, 'rx'),
+    mk('Rotate (Y)', '°', -180, 180, 1, 'ry'),
+    mk('Rotate (Z)', '°', -180, 180, 1, 'rz'),
+    rowSlider('Position X', '%', 0, 100, 0.5, () => sel.x * 100, v => { sel.x = v / 100; updateScrew(C.sel); }),
+    rowSlider('Position Y', '%', 0, 100, 0.5, () => sel.y * 100, v => { sel.y = v / 100; updateScrew(C.sel); }),
+  ];
+  selSliders.forEach(s => compBody.appendChild(s.row));
+}
+function afterListChange() { saveCompose(); rebuildCompose(); renderComposePanel(); }
+
+/* ---- switching modes ---- */
+function setMode(mode) {
+  C.on = mode === 'compose';
+  document.querySelectorAll('.modes button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  main.classList.toggle('compose', C.on);
+  compSec.hidden = !C.on;
+  controls.enabled = !C.on;
+  assembly.visible = !C.on;
+  if (C.on) {
+    scene.background = null; setPoster(C.bg);
+    renderComposePanel(); resize(); useComposeCamera(); rebuildCompose();
+  } else {
+    composeGroup.clear();
+    scene.background = new THREE.Color(state.bg);
+    camera = state.projection === 'isometric' ? orthoCam : perspCam; controls.object = camera;
+    resize(); fitView();
+  }
+  syncUI(); saveCompose();
+}
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+
+/* ---- compose PNG: the whole layout, background included, long side 3840 px ---- */
+function saveComposePNG() {
+  const f = FORMATS[C.format], a = f.w / f.h;
+  const W = a >= 1 ? 3840 : Math.round(3840 * a), H = a >= 1 ? Math.round(3840 / a) : 3840;
+  say('Rendering layout…');
+  setTimeout(() => {
+    const saved = {pr: renderer.getPixelRatio(), sw: stageW, lw: lineMat.linewidth};
+    try {
+      applyMaterial();
+      renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+      stageW = W; stageH = H;
+      const scale = W / saved.sw;
+      nrmRT.setSize(W, H);
+      edgeMat.uniforms.uTexel.value.set(1 / W, 1 / H);
+      edgeMat.uniforms.uWide.value = Math.max(1, Math.round(LINE_PX * scale / 2));
+      lineMat.linewidth = LINE_PX * scale; lineMat.resolution.set(W, H);
+      useComposeCamera();
+      const out = document.createElement('canvas'); out.width = W; out.height = H;
+      const ctx = out.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+      if (posterImg) {   // background drawn like CSS "cover"
+        const s = Math.max(W / posterImg.width, H / posterImg.height), dw = posterImg.width * s, dh = posterImg.height * s;
+        ctx.drawImage(posterImg, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      }
+      if (state.style === 'bitmap') {
+        const layer = document.createElement('canvas');
+        EXPORT = {canvas: layer, w: W, h: H};
+        renderFrame();
+        ctx.drawImage(layer, 0, 0);
+      } else {
+        renderFrame();
+        ctx.drawImage(renderer.domElement, 0, 0);
+      }
+      out.toBlob(b => offerFile(exportName('png'), b), 'image/png');
+    } finally {
+      EXPORT = null;
+      lineMat.linewidth = saved.lw;
+      renderer.setPixelRatio(saved.pr);
+      resize();
+    }
+  }, 30);
+}
 
 /* ================= export ================= */
 const statusEl = document.getElementById('status');
@@ -1349,9 +1635,9 @@ const fileBase = () => {
 let exportFmt = 'png';
 // Outline exports PNG or SVG; Rendering and Bitmap export PNG
 const syncExport = () => {
-  if (state.style !== 'outline') exportFmt = 'png';
+  if (state.style !== 'outline' || C.on) exportFmt = 'png';
   for (const b of document.querySelectorAll('.fmt button')) {
-    b.hidden = b.dataset.fmt === 'svg' && state.style !== 'outline';
+    b.hidden = b.dataset.fmt === 'svg' && (state.style !== 'outline' || C.on);
     b.setAttribute('aria-pressed', String(b.dataset.fmt === exportFmt));
   }
 };
@@ -1380,6 +1666,7 @@ function exportName(ext) {
   return `${stamp}_SCREWAROUND_${String(exportCount).padStart(3, '0')}.${ext}`;
 }
 function savePNG() {
+  if (C.on) return saveComposePNG();
   const W = 3840, H = 2160;
   say('Rendering 4K PNG…');
   setTimeout(() => {
@@ -1628,6 +1915,7 @@ document.getElementById('random').onclick = () => {
 
 syncUI(); resize(); rebuild(); fitView();
 loadSymbolMasks();
+setMode(C.on ? 'compose' : 'design');
 // bring back the last uploaded engraving image, if any
 try {
   const saved = JSON.parse(localStorage.getItem(ENG_KEY) || 'null');
