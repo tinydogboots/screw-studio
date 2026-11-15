@@ -953,7 +953,7 @@ const assembly = new THREE.Group();
 scene.add(assembly);
 let featureLines = null;
 
-const nrmRT = new THREE.WebGLRenderTarget(1, 1, {type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter});
+const nrmRT = new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter});
 const nrmMat = new THREE.ShaderMaterial({side: THREE.DoubleSide,
   vertexShader: `varying vec3 vP; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vP = mv.xyz; gl_Position = projectionMatrix * mv; }`,
   // facet normal from screen derivatives: crisp creases even where mesh normals are smoothed
@@ -995,14 +995,16 @@ const KERNELS = {   // [dx, dy, weight], divisor, slider max
   stucki:   {div: 42, max: 33, k: [[1,0,8],[2,0,4],[-2,1,2],[-1,1,4],[0,1,8],[1,1,4],[2,1,2],[-2,2,1],[-1,2,2],[0,2,4],[1,2,2],[2,2,1]]},
   atkinson: {div: 8,  max: 33, k: [[1,0,1],[2,0,1],[-1,1,1],[0,1,1],[1,1,1],[0,2,1]]},
 };
+let EXPORT = null;   // set while a 4K PNG is being made: {canvas, w, h}
 function ditherFrame() {
-  if (!bmDirty) return;
+  if (!bmDirty && !EXPORT) return;
   bmDirty = false;
-  const w = stageW, h = stageH;
-  if (bmCanvas.width !== w || bmCanvas.height !== h) { bmCanvas.width = w; bmCanvas.height = h; }
-  bmCtx.clearRect(0, 0, w, h);   // start empty so the transparent background reads as "outside the screw"
-  bmCtx.drawImage(renderer.domElement, 0, 0, w, h);
-  const img = bmCtx.getImageData(0, 0, w, h), d = img.data;
+  const out = EXPORT ? EXPORT.canvas : bmCanvas, ctx = EXPORT ? EXPORT.canvas.getContext('2d', {willReadFrequently: true}) : bmCtx;
+  const w = EXPORT ? EXPORT.w : stageW, h = EXPORT ? EXPORT.h : stageH;
+  if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
+  ctx.clearRect(0, 0, w, h);   // start empty so the transparent background reads as "outside the screw"
+  ctx.drawImage(renderer.domElement, 0, 0, w, h);
+  const img = ctx.getImageData(0, 0, w, h), d = img.data;
   const g = new Float32Array(w * h);
   // only the screw is dithered: pixels outside it stay the plain stage colour and never receive error
   const inside = new Uint8Array(w * h);
@@ -1031,9 +1033,9 @@ function ditherFrame() {
   for (let i = 0; i < w * h; i++) {
     if (inside[i]) { const v = g[i]; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; }
     else { d[i * 4] = br; d[i * 4 + 1] = bgG; d[i * 4 + 2] = bb; }
-    d[i * 4 + 3] = 255;
+    d[i * 4 + 3] = inside[i] || !EXPORT ? 255 : 0;   // exported PNGs keep the background transparent
   }
-  bmCtx.putImageData(img, 0, 0);
+  ctx.putImageData(img, 0, 0);
 }
 
 const _lightDir = new THREE.Vector3();
@@ -1363,11 +1365,72 @@ addEventListener('keydown', e => {
 });
 syncExport();
 
+/* PNG export: always 4K (3840 × 2160), transparent background, screw centred and framed.
+   Keeps the current viewing angle, lens and style; line weights scale with the image. */
 function savePNG() {
-  renderFrame();
-  const name = fileBase() + '-' + state.style + '.png';
-  if (state.style === 'bitmap') { bmDirty = true; renderFrame(); bmCanvas.toBlob(b => offerFile(name, b), 'image/png'); return; }
-  renderer.domElement.toBlob(b => offerFile(name, b), 'image/png');
+  const W = 3840, H = 2160;
+  say('Rendering 4K PNG…');
+  setTimeout(() => {
+    const saved = {
+      pr: renderer.getPixelRatio(), sw: stageW, sh: stageH,
+      pos: camera.position.clone(), q: camera.quaternion.clone(), up: camera.up.clone(), target: controls.target.clone(),
+      bg: scene.background, cc: renderer.getClearColor(new THREE.Color()), ca: renderer.getClearAlpha(),
+      zoom: camera.zoom, orthoHalf, lw: lineMat.linewidth,
+    };
+    try {
+      applyMaterial();   // make sure the current style is applied, even if a change is still pending
+      // 4K drawing surface
+      renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+      stageW = W; stageH = H;
+      const scale = W / saved.sw;
+      nrmRT.setSize(W, H);
+      edgeMat.uniforms.uTexel.value.set(1 / W, 1 / H);
+      edgeMat.uniforms.uWide.value = Math.max(1, Math.round(LINE_PX * scale / 2));
+      lineMat.linewidth = LINE_PX * scale; lineMat.resolution.set(W, H);
+
+      // centre: same direction and orientation, aimed at the screw's middle, framed to fill the image
+      const sph = new THREE.Box3().setFromObject(assembly).getBoundingSphere(new THREE.Sphere());
+      const dir = saved.pos.clone().sub(saved.target).normalize();
+      controls.target.copy(sph.center);
+      if (camera === orthoCam) {
+        orthoHalf = sph.radius * 1.12; orthoCam.zoom = 1;
+        Object.assign(orthoCam, {top: orthoHalf, bottom: -orthoHalf, left: -orthoHalf * W / H, right: orthoHalf * W / H});
+        orthoCam.clearViewOffset();
+        orthoCam.position.copy(sph.center).addScaledVector(dir, sph.radius * 8);
+      } else {
+        perspCam.aspect = W / H; perspCam.setFocalLength(state.focal); perspCam.clearViewOffset();
+        const dist = frameDistance(sph.radius);
+        perspCam.position.copy(sph.center).addScaledVector(dir, dist); setPerspClip(dist);
+      }
+      camera.quaternion.copy(saved.q); camera.up.copy(saved.up);
+      camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+
+      // transparent background
+      scene.background = null; renderer.setClearColor(0x000000, 0);
+      const outCanvas = document.createElement('canvas'); outCanvas.width = W; outCanvas.height = H;
+      if (state.style === 'bitmap') {
+        EXPORT = {canvas: outCanvas, w: W, h: H};
+        renderFrame();
+      } else {
+        renderFrame();
+        // outline: the stage pass painted nothing because the background is off; copy the frame out
+        outCanvas.getContext('2d').drawImage(renderer.domElement, 0, 0);
+      }
+      outCanvas.toBlob(b => offerFile(fileBase() + '-' + state.style + '-4k.png', b), 'image/png');
+    } finally {
+      EXPORT = null;
+      scene.background = saved.bg; renderer.setClearColor(saved.cc, saved.ca);
+      lineMat.linewidth = saved.lw;
+      camera.position.copy(saved.pos); camera.quaternion.copy(saved.q); camera.up.copy(saved.up);
+      controls.target.copy(saved.target);
+      orthoHalf = saved.orthoHalf; camera.zoom = saved.zoom;
+      renderer.setPixelRatio(saved.pr);
+      resize();
+      if (camera === perspCam) setPerspClip(camera.position.distanceTo(controls.target));
+      camera.updateProjectionMatrix();
+      bmDirty = true;
+    }
+  }, 30);
 }
 /* Vector export as pure linework (hidden-line drawing of the current view):
    - outline: silhouette edges and open mesh borders (rims, tips), heavier stroke
